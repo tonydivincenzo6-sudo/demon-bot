@@ -1,0 +1,60 @@
+{
+	"geode": "5.10.1",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081"
+	},
+	"id": "tony.demon-bot",
+	"name": "Demon Bot",
+	"version": "v1.0.0",
+	"developer": "Tony",
+	"description": "Spielt automatisch alle bewerteten Demons nacheinander (Noclip und Speed kommen von Eclipse).",
+	"dependencies": {
+		"geode.node-ids": ">=v1.23.3"
+	},
+	"settings": {
+		"protected-account": {
+			"name": "Geschuetzter Account",
+			"description": "Auf diesem Account startet der Bot nie. Leer lassen = keine Sperre.",
+			"type": "string",
+			"default": "GTX980M"
+		},
+		"block-stats-upload": {
+			"name": "Stats nicht hochladen",
+			"description": "Verhindert, dass Sterne/Demons an die Bestenlisten gesendet werden (gilt nicht fuer den geschuetzten Account). Im Spiel siehst du die Zahlen trotzdem.",
+			"type": "bool",
+			"default": true
+		},
+		"delete-after-play": {
+			"name": "Level danach loeschen",
+			"description": "Entfernt gespielte Level wieder aus 'Gespeichert', damit der Spielstand nicht riesig wird. Sterne und Fortschritt bleiben.",
+			"type": "bool",
+			"default": true
+		},
+		"max-real-seconds": {
+			"name": "Zeitlimit pro Level (echte Sekunden)",
+			"description": "Danach wird das Level uebersprungen.",
+			"type": "int",
+			"default": 240,
+			"min": 30,
+			"max": 3600
+		},
+		"max-game-seconds": {
+			"name": "Max. Levellaenge (Spielsekunden)",
+			"description": "Laeuft ein Level im Spiel laenger, wird es uebersprungen (Endlosschleifen).",
+			"type": "int",
+			"default": 900,
+			"min": 60,
+			"max": 7200
+		},
+		"request-gap": {
+			"name": "Pause zwischen Server-Anfragen (s)",
+			"description": "Schont RobTops Server. Kleiner = schneller, aber Gefahr einer IP-Sperre.",
+			"type": "float",
+			"default": 2.5,
+			"min": 1.0,
+			"max": 30.0
+		}
+	}
+}
