@@ -66,9 +66,37 @@ bool sceneReady() {
     return true;
 }
 
-// Server-Suche: demonFilter 1..5 = Easy..Extreme, 0 = alle Demons
-const char* FILTER_PLURAL[] = {"Alle Demons", "Easy Demons", "Medium Demons", "Hard Demons", "Insane Demons", "Extreme Demons"};
-const char* FILTER_SINGLE[] = {"Demon", "Easy Demon", "Medium Demon", "Hard Demon", "Insane Demon", "Extreme Demon"};
+// Kategorien in Spielreihenfolge. diff = Server-Filter ("-3" Auto, "1".."5" Easy..Insane, "-2" Demon),
+// demonFilter 1..5 = Easy..Extreme Demon
+struct Cat {
+    const char* plural;
+    const char* single;
+    const char* diff;
+    int demonFilter;
+};
+const Cat CATS[] = {
+    {"Auto-Level",     "Auto",          "-3", 0},
+    {"Easy-Level",     "Easy",          "1",  0},
+    {"Normal-Level",   "Normal",        "2",  0},
+    {"Hard-Level",     "Hard",          "3",  0},
+    {"Harder-Level",   "Harder",        "4",  0},
+    {"Insane-Level",   "Insane",        "5",  0},
+    {"Easy Demons",    "Easy Demon",    "-2", 1},
+    {"Medium Demons",  "Medium Demon",  "-2", 2},
+    {"Hard Demons",    "Hard Demon",    "-2", 3},
+    {"Insane Demons",  "Insane Demon",  "-2", 4},
+    {"Extreme Demons", "Extreme Demon", "-2", 5},
+};
+constexpr int CAT_COUNT = 11;
+constexpr int FIRST_DEMON = 6;
+const char* MODE_NAME[] = {"Nur Demons", "Alle Level"};
+
+int clampCat(int c) { return c < 0 || c >= CAT_COUNT ? FIRST_DEMON : c; }
+
+std::string catLabel(int cat, bool demonAll) {
+    cat = clampCat(cat);
+    return (cat >= FIRST_DEMON && demonAll) ? "Alle Demons" : CATS[cat].plural;
+}
 
 struct Entry {
     int id = 0;
@@ -91,8 +119,9 @@ public:
 
     // Position in der Suche
     int pass = 1;           // 1 = Hauptdurchlauf, 2 = Nachlese (verpasste Level einsammeln)
-    int filter = 1;         // 1..5
-    bool allMode = false;   // Fallback, falls der Schwierigkeitsfilter nicht greift
+    int mode = 0;           // 0 = nur Demons, 1 = alle bewerteten Level
+    int cat = FIRST_DEMON;  // aktuelle Kategorie (Index in CATS)
+    bool demonAll = false;  // Fallback, falls der Demon-Filter nicht greift: alle Demons gemischt
     int page = 0;
     int total = -1;
     int pageSize = 10;
@@ -149,16 +178,19 @@ public:
     double maxReal() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("max-real-seconds")); }
     double maxGame() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("max-game-seconds")); }
 
-    std::string filterLabel() const { return allMode ? FILTER_PLURAL[0] : FILTER_PLURAL[filter]; }
-    std::string diffLabel() const { return allMode ? FILTER_SINGLE[0] : FILTER_SINGLE[filter]; }
+    int firstCat() const { return mode == 1 ? 0 : FIRST_DEMON; }
+    bool isDemonCat() const { return cat >= FIRST_DEMON; }
+    std::string filterLabel() const { return catLabel(cat, demonAll); }
+    std::string diffLabel() const { return (isDemonCat() && demonAll) ? "Demon" : CATS[clampCat(cat)].single; }
     Entry const* entry() const { return idx < list.size() ? &list[idx] : nullptr; }
 
     // ---------- Speichern / Laden ----------
     void saveProgress() {
         auto m = Mod::get();
         m->setSavedValue<int>("pass", pass);
-        m->setSavedValue<int>("filter", filter);
-        m->setSavedValue<bool>("all-mode", allMode);
+        m->setSavedValue<int>("mode", mode);
+        m->setSavedValue<int>("cat", cat);
+        m->setSavedValue<bool>("demon-all", demonAll);
         m->setSavedValue<int>("page", page);
         m->setSavedValue<int>("number", number);
         m->setSavedValue<int>("done", done);
@@ -177,8 +209,16 @@ public:
     void loadProgress() {
         auto m = Mod::get();
         pass = m->getSavedValue<int>("pass", 1);
-        filter = m->getSavedValue<int>("filter", 1);
-        allMode = m->getSavedValue<bool>("all-mode", false);
+        mode = m->getSavedValue<int>("mode", 0) == 1 ? 1 : 0;
+        cat = m->getSavedValue<int>("cat", -1);
+        demonAll = m->getSavedValue<bool>("demon-all", false);
+        if (cat < 0) {
+            // Stand aus Version 1.0 (nur Demons) uebernehmen
+            int f = m->getSavedValue<int>("filter", 1);
+            cat = FIRST_DEMON + std::clamp(f, 1, 5) - 1;
+            demonAll = m->getSavedValue<bool>("all-mode", false);
+            mode = 0;
+        }
         page = m->getSavedValue<int>("page", 0);
         number = m->getSavedValue<int>("number", 0);
         done = m->getSavedValue<int>("done", 0);
@@ -191,12 +231,13 @@ public:
         while (std::getline(ss, part, ',')) {
             try { if (!part.empty()) failedIds.insert(std::stoi(part)); } catch (...) {}
         }
-        if (filter < 1 || filter > 5) filter = 1;
+        cat = clampCat(cat);
+        if (cat < firstCat()) cat = firstCat();
         if (page < 0) page = 0;
     }
 
     void resetProgress() {
-        pass = 1; filter = 1; allMode = false; page = 0;
+        pass = 1; demonAll = false; page = 0;
         number = 0; done = 0; skipped = 0; already = 0;
         failedText.clear(); failedIds.clear();
     }
@@ -205,11 +246,16 @@ public:
 
     std::string savedPosition() {
         auto m = Mod::get();
-        int f = m->getSavedValue<int>("filter", 1);
-        if (f < 1 || f > 5) f = 1;
-        bool all = m->getSavedValue<bool>("all-mode", false);
-        return fmt::format("{}, Seite {} (geschafft: {})",
-            all ? FILTER_PLURAL[0] : FILTER_PLURAL[f], m->getSavedValue<int>("page", 0) + 1, m->getSavedValue<int>("done", 0));
+        int c = m->getSavedValue<int>("cat", -1);
+        bool all = m->getSavedValue<bool>("demon-all", false);
+        int md = m->getSavedValue<int>("mode", 0) == 1 ? 1 : 0;
+        if (c < 0) {
+            c = FIRST_DEMON + std::clamp(m->getSavedValue<int>("filter", 1), 1, 5) - 1;
+            all = m->getSavedValue<bool>("all-mode", false);
+            md = 0;
+        }
+        return fmt::format("{}: {}, Seite {} (geschafft: {})",
+            MODE_NAME[md], catLabel(c, all), m->getSavedValue<int>("page", 0) + 1, m->getSavedValue<int>("done", 0));
     }
 
     // GD-Spielstand + Bot-Stand zusammen auf die Platte schreiben
@@ -236,10 +282,16 @@ public:
     }
 
     // ---------- Start / Stopp ----------
-    void start(bool resume) {
+    void start(bool resume, int newMode = 0) {
         if (running) return;
         if (isProtectedAccount()) return;
-        if (resume) loadProgress(); else resetProgress();
+        if (resume) {
+            loadProgress();
+        } else {
+            resetProgress();
+            mode = newMode == 1 ? 1 : 0;
+            cat = firstCat();
+        }
         running = true;
         ph = Ph::Page;
         list.clear(); idx = 0; total = -1; pageSize = 10;
@@ -249,8 +301,8 @@ public:
         Mod::get()->setSavedValue<bool>("running", true);
         saveProgress();
         (void)Mod::get()->saveData();
-        log::info("Demon-Bot gestartet ({}), {} Seite {}", resume ? "weiter" : "neu", filterLabel(), page + 1);
-        Notification::create("Demon-Bot gestartet", NotificationIcon::Success)->show();
+        log::info("Bot gestartet ({}, {}), {} Seite {}", resume ? "weiter" : "neu", MODE_NAME[mode], filterLabel(), page + 1);
+        Notification::create(fmt::format("Bot gestartet: {}", MODE_NAME[mode]), NotificationIcon::Success)->show();
     }
 
     void releaseDelegates() {
@@ -281,7 +333,7 @@ public:
         Mod::get()->setSavedValue<bool>("has-progress", false);
         writeReport();
         saveAll();
-        summaryText = summary("Fertig! Alle Demons sind durch.");
+        summaryText = summary(mode == 1 ? "Fertig! Alle bewerteten Level sind durch." : "Fertig! Alle Demons sind durch.");
         showSummaryOnMenu = true;
         CCDirector::get()->replaceScene(CCTransitionFade::create(0.5f, MenuLayer::scene(false)));
     }
@@ -340,10 +392,10 @@ public:
     void requestPage(double t) {
         if (t - tLastReq < gap()) return;
         auto so = GJSearchObject::create(
-            SearchType::Recent, "", "-2", "-", page,
+            SearchType::Recent, "", CATS[cat].diff, "-", page,
             true,   // nur bewertete Level
             false, false, 0, false, false, false, false, false, false, false, false, false, false,
-            allMode ? 0 : filter, 0, 0
+            isDemonCat() && !demonAll ? CATS[cat].demonFilter : 0, 0, 0
         );
         auto glm = GameLevelManager::get();
         std::string key = so->getKey();
@@ -393,14 +445,15 @@ public:
         if (list.empty()) { endOfFilter(); return; }
 
         // Selbsttest: greift der Schwierigkeitsfilter? Dann haben (fast) alle Level dieselbe Demon-Stufe.
-        if (!allMode && page == 0 && list.size() >= 3) {
+        if (isDemonCat() && !demonAll && page == 0 && list.size() >= 3) {
             std::map<int, int> count;
             for (auto& e : list) count[e.raw]++;
             int best = 0;
             for (auto& [k, v] : count) best = std::max(best, v);
             if (best < static_cast<int>(list.size()) - 1) {
                 log::warn("Demon-Filter greift nicht ({} von {} gleich) -> alle Demons gemischt", best, list.size());
-                allMode = true;
+                demonAll = true;
+                cat = FIRST_DEMON;
                 page = 0; total = -1; list.clear();
                 ph = Ph::Page;
                 Notification::create("Filter klappt nicht - spiele alle Demons gemischt", NotificationIcon::Warning, 4.f)->show();
@@ -420,9 +473,9 @@ public:
             return;
         }
         retries = 0;
-        if (page == 0 && !allMode) {
-            // Filterwert wird vom Server evtl. nicht angenommen
-            allMode = true; total = -1;
+        if (page == 0 && isDemonCat() && !demonAll) {
+            // Demon-Filterwert wird vom Server evtl. nicht angenommen
+            demonAll = true; cat = FIRST_DEMON; total = -1;
             ph = Ph::Page;
             return;
         }
@@ -433,11 +486,12 @@ public:
 
     void endOfFilter() {
         page = 0; total = -1; list.clear(); idx = 0;
-        if (!allMode && filter < 5) {
-            filter++;
+        bool lastCat = cat >= CAT_COUNT - 1 || (isDemonCat() && demonAll);
+        if (!lastCat) {
+            cat++;
             ph = Ph::Page;
         } else if (pass == 1) {
-            pass = 2; filter = 1;
+            pass = 2; cat = firstCat();
             ph = Ph::Page;
             Notification::create("Nachlese: suche verpasste Level", NotificationIcon::Info, 4.f)->show();
         } else {
@@ -671,6 +725,17 @@ public:
     }
 };
 
+// Auswahl: nur Demons oder alle bewerteten Level, dann neu starten
+void askModeAndStart() {
+    createQuickPopup("Bot",
+        "Was soll gespielt werden?\n\n"
+        "<cy>Nur Demons</c>: Easy bis Extreme Demon\n"
+        "<cy>Alle Level</c>: Auto, Easy, Normal, Hard, Harder, Insane und danach alle Demons",
+        "Nur Demons", "Alle Level",
+        [](FLAlertLayer*, bool alle) { DemonBot::get()->start(false, alle ? 1 : 0); },
+        true, true);
+}
+
 CCSprite* makeButtonSprite() {
     const char* frame = "diffIcon_10_btn_001.png";
     if (!CCSpriteFrameCache::sharedSpriteFrameCache()->spriteFrameByName(frame)) frame = "GJ_playBtn2_001.png";
@@ -752,14 +817,17 @@ class $modify(BotMenuLayer, MenuLayer) {
             "Vorher in Eclipse: <cg>Noclip</c> und <cg>Speedhack</c> an, <cr>Safe Mode</c> aus "
             "(sonst zaehlen die Level nicht).\nAnhalten: ESC / Pause.";
         if (bot->hasSavedProgress()) {
-            createQuickPopup("Demon-Bot",
+            createQuickPopup("Bot",
                 fmt::format("{}\n\nGespeicherter Stand: {}", info, bot->savedPosition()),
                 "Neu starten", "Weiter",
-                [](FLAlertLayer*, bool weiter) { DemonBot::get()->start(weiter); },
+                [](FLAlertLayer*, bool weiter) {
+                    if (weiter) DemonBot::get()->start(true);
+                    else askModeAndStart();
+                },
                 true, true);
         } else {
-            createQuickPopup("Demon-Bot", info, "Abbrechen", "Start",
-                [](FLAlertLayer*, bool go) { if (go) DemonBot::get()->start(false); },
+            createQuickPopup("Bot", info, "Abbrechen", "Start",
+                [](FLAlertLayer*, bool go) { if (go) askModeAndStart(); },
                 true, true);
         }
     }

@@ -1,7 +1,10 @@
 # Demon Bot
 
-Ein Knopf im Hauptmenue startet einen Autopiloten, der alle bewerteten Classic-Demons nacheinander
-herunterlaedt und spielt (Easy -> Medium -> Hard -> Insane -> Extreme).
+Ein Knopf im Hauptmenue startet einen Autopiloten, der bewertete Classic-Level nacheinander
+herunterlaedt und spielt. Beim Start waehlst du:
+
+- **Nur Demons**: Easy -> Medium -> Hard -> Insane -> Extreme Demon
+- **Alle Level**: Auto -> Easy -> Normal -> Hard -> Harder -> Insane -> danach alle Demons
 
 **Noclip und Speedhack muessen in Eclipse (oder einem anderen Mod) an sein.** Der Bot selbst gibt keine Eingaben,
 er bedient nur das Menue.

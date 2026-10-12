@@ -7,9 +7,9 @@
 	},
 	"id": "tony.demon-bot",
 	"name": "Demon Bot",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "Tony",
-	"description": "Spielt automatisch alle bewerteten Demons nacheinander (Noclip und Speed kommen von Eclipse).",
+	"description": "Spielt automatisch alle bewerteten Level oder nur Demons nacheinander (Noclip und Speed kommen von Eclipse).",
 	"dependencies": {
 		"geode.node-ids": ">=v1.23.3"
 	},
