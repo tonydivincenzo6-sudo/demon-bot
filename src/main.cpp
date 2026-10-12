@@ -89,13 +89,46 @@ const Cat CATS[] = {
 };
 constexpr int CAT_COUNT = 11;
 constexpr int FIRST_DEMON = 6;
-const char* MODE_NAME[] = {"Nur Demons", "Alle Level"};
+constexpr int MASK_ALL = (1 << CAT_COUNT) - 1;
+constexpr int MASK_DEMONS = MASK_ALL & ~((1 << FIRST_DEMON) - 1);
+// Demon-Stufe laut Server (Level-Key 43) -> Kategorie; nur fuer den Notfall-Modus "Demons gemischt"
+int rawToCat(int raw) {
+    switch (raw) {
+        case 3: return 6; case 4: return 7; case 0: return 8; case 5: return 9; case 6: return 10;
+        default: return -1;
+    }
+}
 
 int clampCat(int c) { return c < 0 || c >= CAT_COUNT ? FIRST_DEMON : c; }
+bool inMask(int mask, int c) { return c >= 0 && c < CAT_COUNT && (mask >> c & 1); }
+int nextInMask(int mask, int after) {
+    for (int c = after + 1; c < CAT_COUNT; c++) if (inMask(mask, c)) return c;
+    return -1;
+}
 
 std::string catLabel(int cat, bool demonAll) {
     cat = clampCat(cat);
-    return (cat >= FIRST_DEMON && demonAll) ? "Alle Demons" : CATS[cat].plural;
+    return (cat >= FIRST_DEMON && demonAll) ? "Demons (gemischt)" : CATS[cat].plural;
+}
+
+std::string maskLabel(int mask) {
+    mask &= MASK_ALL;
+    if (mask == MASK_ALL) return "Alle Level";
+    if (mask == MASK_DEMONS) return "Nur Demons";
+    std::string out;
+    int n = 0;
+    for (int c = 0; c < CAT_COUNT; c++) {
+        if (!inMask(mask, c)) continue;
+        if (++n > 3) { out += ", ..."; break; }
+        if (!out.empty()) out += ", ";
+        out += CATS[c].single;
+    }
+    return out.empty() ? "nichts" : out;
+}
+
+// Alter Stand (v1.0 / v1.1) -> Auswahl-Maske
+int legacyMask() {
+    return Mod::get()->getSavedValue<int>("mode", 0) == 1 ? MASK_ALL : MASK_DEMONS;
 }
 
 struct Entry {
@@ -119,7 +152,7 @@ public:
 
     // Position in der Suche
     int pass = 1;           // 1 = Hauptdurchlauf, 2 = Nachlese (verpasste Level einsammeln)
-    int mode = 0;           // 0 = nur Demons, 1 = alle bewerteten Level
+    int mask = MASK_DEMONS; // ausgewaehlte Kategorien (Bit i = CATS[i])
     int cat = FIRST_DEMON;  // aktuelle Kategorie (Index in CATS)
     bool demonAll = false;  // Fallback, falls der Demon-Filter nicht greift: alle Demons gemischt
     int page = 0;
@@ -178,17 +211,26 @@ public:
     double maxReal() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("max-real-seconds")); }
     double maxGame() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("max-game-seconds")); }
 
-    int firstCat() const { return mode == 1 ? 0 : FIRST_DEMON; }
+    int firstCat() const { return nextInMask(mask, -1); }
+    int firstDemonCat() const { return nextInMask(mask, FIRST_DEMON - 1); }
+    bool allDemonsSelected() const { return (mask & MASK_DEMONS) == MASK_DEMONS; }
     bool isDemonCat() const { return cat >= FIRST_DEMON; }
     std::string filterLabel() const { return catLabel(cat, demonAll); }
-    std::string diffLabel() const { return (isDemonCat() && demonAll) ? "Demon" : CATS[clampCat(cat)].single; }
+    std::string diffLabel() const {
+        if (isDemonCat() && demonAll) {
+            auto e = entry();
+            int c = e ? rawToCat(e->raw) : -1;
+            return c >= 0 ? CATS[c].single : "Demon";
+        }
+        return CATS[clampCat(cat)].single;
+    }
     Entry const* entry() const { return idx < list.size() ? &list[idx] : nullptr; }
 
     // ---------- Speichern / Laden ----------
     void saveProgress() {
         auto m = Mod::get();
         m->setSavedValue<int>("pass", pass);
-        m->setSavedValue<int>("mode", mode);
+        m->setSavedValue<int>("mask", mask);
         m->setSavedValue<int>("cat", cat);
         m->setSavedValue<bool>("demon-all", demonAll);
         m->setSavedValue<int>("page", page);
@@ -209,7 +251,10 @@ public:
     void loadProgress() {
         auto m = Mod::get();
         pass = m->getSavedValue<int>("pass", 1);
-        mode = m->getSavedValue<int>("mode", 0) == 1 ? 1 : 0;
+        mask = m->getSavedValue<int>("mask", -1);
+        if (mask < 0) mask = legacyMask();
+        mask &= MASK_ALL;
+        if (mask == 0) mask = MASK_DEMONS;
         cat = m->getSavedValue<int>("cat", -1);
         demonAll = m->getSavedValue<bool>("demon-all", false);
         if (cat < 0) {
@@ -217,7 +262,7 @@ public:
             int f = m->getSavedValue<int>("filter", 1);
             cat = FIRST_DEMON + std::clamp(f, 1, 5) - 1;
             demonAll = m->getSavedValue<bool>("all-mode", false);
-            mode = 0;
+            mask = MASK_DEMONS;
         }
         page = m->getSavedValue<int>("page", 0);
         number = m->getSavedValue<int>("number", 0);
@@ -232,7 +277,10 @@ public:
             try { if (!part.empty()) failedIds.insert(std::stoi(part)); } catch (...) {}
         }
         cat = clampCat(cat);
-        if (cat < firstCat()) cat = firstCat();
+        if (!inMask(mask, cat)) {
+            int n = nextInMask(mask, cat);
+            cat = n >= 0 ? n : firstCat();
+        }
         if (page < 0) page = 0;
     }
 
@@ -248,14 +296,15 @@ public:
         auto m = Mod::get();
         int c = m->getSavedValue<int>("cat", -1);
         bool all = m->getSavedValue<bool>("demon-all", false);
-        int md = m->getSavedValue<int>("mode", 0) == 1 ? 1 : 0;
+        int mk = m->getSavedValue<int>("mask", -1);
+        if (mk < 0) mk = legacyMask();
         if (c < 0) {
             c = FIRST_DEMON + std::clamp(m->getSavedValue<int>("filter", 1), 1, 5) - 1;
             all = m->getSavedValue<bool>("all-mode", false);
-            md = 0;
+            mk = MASK_DEMONS;
         }
-        return fmt::format("{}: {}, Seite {} (geschafft: {})",
-            MODE_NAME[md], catLabel(c, all), m->getSavedValue<int>("page", 0) + 1, m->getSavedValue<int>("done", 0));
+        return fmt::format("{}\nGerade: {}, Seite {} (geschafft: {})",
+            maskLabel(mk), catLabel(c, all), m->getSavedValue<int>("page", 0) + 1, m->getSavedValue<int>("done", 0));
     }
 
     // GD-Spielstand + Bot-Stand zusammen auf die Platte schreiben
@@ -282,14 +331,15 @@ public:
     }
 
     // ---------- Start / Stopp ----------
-    void start(bool resume, int newMode = 0) {
+    void start(bool resume, int newMask = MASK_DEMONS) {
         if (running) return;
         if (isProtectedAccount()) return;
         if (resume) {
             loadProgress();
         } else {
             resetProgress();
-            mode = newMode == 1 ? 1 : 0;
+            mask = newMask & MASK_ALL;
+            if (mask == 0) mask = MASK_DEMONS;
             cat = firstCat();
         }
         running = true;
@@ -301,8 +351,8 @@ public:
         Mod::get()->setSavedValue<bool>("running", true);
         saveProgress();
         (void)Mod::get()->saveData();
-        log::info("Bot gestartet ({}, {}), {} Seite {}", resume ? "weiter" : "neu", MODE_NAME[mode], filterLabel(), page + 1);
-        Notification::create(fmt::format("Bot gestartet: {}", MODE_NAME[mode]), NotificationIcon::Success)->show();
+        log::info("Bot gestartet ({}, {}), {} Seite {}", resume ? "weiter" : "neu", maskLabel(mask), filterLabel(), page + 1);
+        Notification::create(fmt::format("Bot gestartet: {}", maskLabel(mask)), NotificationIcon::Success)->show();
     }
 
     void releaseDelegates() {
@@ -333,7 +383,7 @@ public:
         Mod::get()->setSavedValue<bool>("has-progress", false);
         writeReport();
         saveAll();
-        summaryText = summary(mode == 1 ? "Fertig! Alle bewerteten Level sind durch." : "Fertig! Alle Demons sind durch.");
+        summaryText = summary("Fertig! Alles aus deiner Auswahl ist durch.");
         showSummaryOnMenu = true;
         CCDirector::get()->replaceScene(CCTransitionFade::create(0.5f, MenuLayer::scene(false)));
     }
@@ -453,7 +503,7 @@ public:
             if (best < static_cast<int>(list.size()) - 1) {
                 log::warn("Demon-Filter greift nicht ({} von {} gleich) -> alle Demons gemischt", best, list.size());
                 demonAll = true;
-                cat = FIRST_DEMON;
+                cat = firstDemonCat();
                 page = 0; total = -1; list.clear();
                 ph = Ph::Page;
                 Notification::create("Filter klappt nicht - spiele alle Demons gemischt", NotificationIcon::Warning, 4.f)->show();
@@ -475,7 +525,7 @@ public:
         retries = 0;
         if (page == 0 && isDemonCat() && !demonAll) {
             // Demon-Filterwert wird vom Server evtl. nicht angenommen
-            demonAll = true; cat = FIRST_DEMON; total = -1;
+            demonAll = true; cat = firstDemonCat(); total = -1;
             ph = Ph::Page;
             return;
         }
@@ -486,9 +536,9 @@ public:
 
     void endOfFilter() {
         page = 0; total = -1; list.clear(); idx = 0;
-        bool lastCat = cat >= CAT_COUNT - 1 || (isDemonCat() && demonAll);
-        if (!lastCat) {
-            cat++;
+        int next = (isDemonCat() && demonAll) ? -1 : nextInMask(mask, cat);
+        if (next >= 0) {
+            cat = next;
             ph = Ph::Page;
         } else if (pass == 1) {
             pass = 2; cat = firstCat();
@@ -515,6 +565,11 @@ public:
         while (idx < list.size()) {
             auto& e = list[idx];
             if (e.platformer || failedIds.count(e.id)) { idx++; continue; }
+            if (isDemonCat() && demonAll && !allDemonsSelected()) {
+                // Notfall-Modus: Demon-Stufen, die nicht ausgewaehlt sind, auslassen
+                int c = rawToCat(e.raw);
+                if (c >= 0 && !inMask(mask, c)) { idx++; continue; }
+            }
             if (gsm->hasCompletedOnlineLevel(e.id)) {
                 if (pass == 1) already++;
                 idx++;
@@ -725,15 +780,107 @@ public:
     }
 };
 
-// Auswahl: nur Demons oder alle bewerteten Level, dann neu starten
-void askModeAndStart() {
-    createQuickPopup("Bot",
-        "Was soll gespielt werden?\n\n"
-        "<cy>Nur Demons</c>: Easy bis Extreme Demon\n"
-        "<cy>Alle Level</c>: Auto, Easy, Normal, Hard, Harder, Insane und danach alle Demons",
-        "Nur Demons", "Alle Level",
-        [](FLAlertLayer*, bool alle) { DemonBot::get()->start(false, alle ? 1 : 0); },
-        true, true);
+// Schwierigkeits-Symbol aus GD (falls vorhanden)
+CCSprite* diffIcon(int c) {
+    static const char* frames[CAT_COUNT] = {
+        "diffIcon_auto_btn_001.png", "diffIcon_01_btn_001.png", "diffIcon_02_btn_001.png",
+        "diffIcon_03_btn_001.png", "diffIcon_04_btn_001.png", "diffIcon_05_btn_001.png",
+        "diffIcon_07_btn_001.png", "diffIcon_08_btn_001.png", "diffIcon_06_btn_001.png",
+        "diffIcon_09_btn_001.png", "diffIcon_10_btn_001.png",
+    };
+    if (!CCSpriteFrameCache::sharedSpriteFrameCache()->spriteFrameByName(frames[c])) return nullptr;
+    return CCSprite::createWithSpriteFrameName(frames[c]);
+}
+
+// Auswahl, welche Schwierigkeiten gespielt werden; danach neu starten
+class ChoosePopup : public Popup {
+protected:
+    int m_mask = MASK_DEMONS;
+    CCMenuItemToggler* m_togglers[CAT_COUNT] = {};
+
+    bool init() {
+        constexpr float W = 400.f, H = 290.f;
+        if (!Popup::init(W, H)) return false;
+        this->setTitle("Was soll gespielt werden?");
+
+        m_mask = Mod::get()->getSavedValue<int>("selection-mask", -1);
+        if (m_mask < 0) m_mask = legacyMask();
+        m_mask &= MASK_ALL;
+
+        // Links: normale Schwierigkeiten, rechts: Demons
+        for (int i = 0; i < CAT_COUNT; i++) {
+            bool demon = i >= FIRST_DEMON;
+            int row = demon ? i - FIRST_DEMON : i;
+            float x = demon ? 195.f : 28.f;
+            float y = H - 56.f - row * 27.f;
+
+            auto tog = CCMenuItemExt::createTogglerWithStandardSprites(0.6f, [this, i](CCMenuItemToggler*) {
+                m_mask ^= (1 << i);
+            });
+            tog->toggle(inMask(m_mask, i));
+            m_buttonMenu->addChildAtPosition(tog, Anchor::BottomLeft, {x, y});
+            m_togglers[i] = tog;
+
+            float lx = x + 18.f;
+            if (auto icon = diffIcon(i)) {
+                icon->setScale(0.42f);
+                m_mainLayer->addChildAtPosition(icon, Anchor::BottomLeft, {lx + 10.f, y});
+                lx += 24.f;
+            }
+            auto lbl = CCLabelBMFont::create(CATS[i].single, "bigFont.fnt");
+            lbl->setScale(0.38f);
+            lbl->setAnchorPoint({0.f, 0.5f});
+            m_mainLayer->addChildAtPosition(lbl, Anchor::BottomLeft, {lx, y});
+        }
+
+        // Schnellauswahl
+        auto quick = [this](const char* text, float x, int mask) {
+            auto spr = ButtonSprite::create(text, "bigFont.fnt", "GJ_button_04.png", 0.55f);
+            auto btn = CCMenuItemExt::createSpriteExtra(spr, [this, mask](CCMenuItemSpriteExtra*) { this->setMask(mask); });
+            m_buttonMenu->addChildAtPosition(btn, Anchor::Bottom, {x, 60.f});
+        };
+        quick("Alle", -110.f, MASK_ALL);
+        quick("Nur Demons", 0.f, MASK_DEMONS);
+        quick("Keine", 110.f, 0);
+
+        auto startSpr = ButtonSprite::create("Start", "goldFont.fnt", "GJ_button_01.png", 0.8f);
+        auto startBtn = CCMenuItemExt::createSpriteExtra(startSpr, [this](CCMenuItemSpriteExtra*) { this->onStart(); });
+        m_buttonMenu->addChildAtPosition(startBtn, Anchor::Bottom, {0.f, 25.f});
+        return true;
+    }
+
+    void setMask(int mask) {
+        m_mask = mask & MASK_ALL;
+        for (int i = 0; i < CAT_COUNT; i++) {
+            if (m_togglers[i]) m_togglers[i]->toggle(inMask(m_mask, i));
+        }
+    }
+
+    void onStart() {
+        if ((m_mask & MASK_ALL) == 0) {
+            Notification::create("Waehle mindestens eine Schwierigkeit aus", NotificationIcon::Warning)->show();
+            return;
+        }
+        int mask = m_mask;
+        Mod::get()->setSavedValue<int>("selection-mask", mask);
+        DemonBot::get()->start(false, mask);
+        this->onClose(nullptr);
+    }
+
+public:
+    static ChoosePopup* create() {
+        auto ret = new ChoosePopup();
+        if (ret->init()) {
+            ret->autorelease();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
+    }
+};
+
+void openChooser() {
+    if (auto p = ChoosePopup::create()) p->show();
 }
 
 CCSprite* makeButtonSprite() {
@@ -822,12 +969,12 @@ class $modify(BotMenuLayer, MenuLayer) {
                 "Neu starten", "Weiter",
                 [](FLAlertLayer*, bool weiter) {
                     if (weiter) DemonBot::get()->start(true);
-                    else askModeAndStart();
+                    else openChooser();
                 },
                 true, true);
         } else {
             createQuickPopup("Bot", info, "Abbrechen", "Start",
-                [](FLAlertLayer*, bool go) { if (go) askModeAndStart(); },
+                [](FLAlertLayer*, bool go) { if (go) openChooser(); },
                 true, true);
         }
     }
