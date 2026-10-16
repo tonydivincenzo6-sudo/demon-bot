@@ -1,3 +1,8 @@
+# v1.3.0
+- Neu: Platformer-Level (Auswahl oben im Fenster: Classic und/oder Platformer)
+- Platformer: Der Bot sucht selbst einen Weg zum Ziel und spielt ihn dann sauber von vorne
+- Einstellungen fuer Platformer-Suchzeit und Speicher
+
 # v1.2.0
 - Auswahl-Fenster: jede Schwierigkeit einzeln an/aus (Auto bis Extreme Demon)
 - Schnellknoepfe: Alle, Nur Demons, Keine

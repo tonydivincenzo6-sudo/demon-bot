@@ -7,9 +7,9 @@
 	},
 	"id": "tony.demon-bot",
 	"name": "Demon Bot",
-	"version": "v1.2.0",
+	"version": "v1.3.0",
 	"developer": "Tony",
-	"description": "Spielt automatisch alle bewerteten Level oder nur Demons nacheinander (Noclip und Speed kommen von Eclipse).",
+	"description": "Spielt automatisch bewertete Level nacheinander: Classic mit Noclip, Platformer mit eigener Wegsuche.",
 	"dependencies": {
 		"geode.node-ids": ">=v1.23.3"
 	},
@@ -55,6 +55,30 @@
 			"default": 2.5,
 			"min": 1.0,
 			"max": 30.0
+		},
+		"plat-search-minutes": {
+			"name": "Platformer: max. Suchzeit pro Level (Minuten)",
+			"description": "Findet der Bot bis dahin keinen Weg, wird das Level uebersprungen.",
+			"type": "int",
+			"default": 3,
+			"min": 1,
+			"max": 30
+		},
+		"plat-max-cells": {
+			"name": "Platformer: max. gemerkte Orte",
+			"description": "Mehr = gruendlichere Suche, braucht aber mehr Speicher. Auf dem Handy nicht zu hoch stellen.",
+			"type": "int",
+			"default": 400,
+			"min": 50,
+			"max": 3000
+		},
+		"plat-frame-budget-ms": {
+			"name": "Platformer: Rechenzeit pro Bild (ms)",
+			"description": "Mehr = schnellere Suche, aber ruckeligere Anzeige.",
+			"type": "int",
+			"default": 14,
+			"min": 4,
+			"max": 50
 		}
 	}
 }

@@ -4,6 +4,8 @@
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GameLevelManager.hpp>
+#include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/GameStatsManager.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -11,6 +13,10 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include <memory>
+#include <random>
+#include <unordered_map>
+#include <cmath>
 #include <set>
 #include <sstream>
 #include <string>
@@ -87,10 +93,23 @@ const Cat CATS[] = {
     {"Insane Demons",  "Insane Demon",  "-2", 4},
     {"Extreme Demons", "Extreme Demon", "-2", 5},
 };
-constexpr int CAT_COUNT = 11;
+constexpr int CAT_COUNT = 11;                       // Schwierigkeiten
 constexpr int FIRST_DEMON = 6;
-constexpr int MASK_ALL = (1 << CAT_COUNT) - 1;
-constexpr int MASK_DEMONS = MASK_ALL & ~((1 << FIRST_DEMON) - 1);
+constexpr int TYPE_COUNT = 2;                       // 0 = Classic, 1 = Platformer
+constexpr int ALL_CATS = CAT_COUNT * TYPE_COUNT;    // Kategorie c: Typ c / 11, Schwierigkeit c % 11
+constexpr int DIFF_BITS = (1 << CAT_COUNT) - 1;     // Bits 0..10: Schwierigkeiten
+constexpr int TYPE_CLASSIC = 1 << CAT_COUNT;        // Bit 11
+constexpr int TYPE_PLAT = 1 << (CAT_COUNT + 1);     // Bit 12
+constexpr int MASK_ALL = DIFF_BITS;                 // alle Schwierigkeiten
+constexpr int MASK_DEMONS = DIFF_BITS & ~((1 << FIRST_DEMON) - 1);
+int catDiff(int c) { return c % CAT_COUNT; }
+int catType(int c) { return c / CAT_COUNT; }
+// Gueltige Maske: mindestens ein Level-Typ (alte Staende kannten nur Classic)
+int fixMask(int m) {
+    m &= DIFF_BITS | TYPE_CLASSIC | TYPE_PLAT;
+    if (!(m & (TYPE_CLASSIC | TYPE_PLAT))) m |= TYPE_CLASSIC;
+    return m;
+}
 // Demon-Stufe laut Server (Level-Key 43) -> Kategorie; nur fuer den Notfall-Modus "Demons gemischt"
 int rawToCat(int raw) {
     switch (raw) {
@@ -99,37 +118,606 @@ int rawToCat(int raw) {
     }
 }
 
-int clampCat(int c) { return c < 0 || c >= CAT_COUNT ? FIRST_DEMON : c; }
-bool inMask(int mask, int c) { return c >= 0 && c < CAT_COUNT && (mask >> c & 1); }
+int clampCat(int c) { return c < 0 || c >= ALL_CATS ? FIRST_DEMON : c; }
+bool diffInMask(int mask, int d) { return d >= 0 && d < CAT_COUNT && (mask >> d & 1); }
+bool inMask(int mask, int c) {
+    return c >= 0 && c < ALL_CATS && diffInMask(mask, catDiff(c)) && (mask >> (CAT_COUNT + catType(c)) & 1);
+}
 int nextInMask(int mask, int after) {
-    for (int c = after + 1; c < CAT_COUNT; c++) if (inMask(mask, c)) return c;
+    for (int c = after + 1; c < ALL_CATS; c++) if (inMask(mask, c)) return c;
     return -1;
 }
 
 std::string catLabel(int cat, bool demonAll) {
     cat = clampCat(cat);
-    return (cat >= FIRST_DEMON && demonAll) ? "Demons (gemischt)" : CATS[cat].plural;
+    std::string base = (catDiff(cat) >= FIRST_DEMON && demonAll) ? "Demons (gemischt)" : CATS[catDiff(cat)].plural;
+    return catType(cat) == 1 ? base + " (Platformer)" : base;
 }
 
 std::string maskLabel(int mask) {
-    mask &= MASK_ALL;
-    if (mask == MASK_ALL) return "Alle Level";
-    if (mask == MASK_DEMONS) return "Nur Demons";
+    mask = fixMask(mask);
+    std::string types = (mask & TYPE_CLASSIC) && (mask & TYPE_PLAT) ? "Classic + Platformer"
+                      : (mask & TYPE_PLAT) ? "Platformer" : "Classic";
+    int d = mask & DIFF_BITS;
+    if (d == MASK_ALL) return types + ": alle Schwierigkeiten";
+    if (d == MASK_DEMONS) return types + ": nur Demons";
     std::string out;
     int n = 0;
     for (int c = 0; c < CAT_COUNT; c++) {
-        if (!inMask(mask, c)) continue;
+        if (!diffInMask(d, c)) continue;
         if (++n > 3) { out += ", ..."; break; }
         if (!out.empty()) out += ", ";
         out += CATS[c].single;
     }
-    return out.empty() ? "nichts" : out;
+    return types + ": " + (out.empty() ? "nichts" : out);
 }
 
 // Alter Stand (v1.0 / v1.1) -> Auswahl-Maske
 int legacyMask() {
-    return Mod::get()->getSavedValue<int>("mode", 0) == 1 ? MASK_ALL : MASK_DEMONS;
+    return (Mod::get()->getSavedValue<int>("mode", 0) == 1 ? MASK_ALL : MASK_DEMONS) | TYPE_CLASSIC;
 }
+
+// =====================================================================
+// Platformer-Bot: findet mit dem echten Spiel selbst einen Weg zum Ziel.
+//
+// Er speichert Spielzustaende (wie Platformer-Checkpoints), probiert von dort aus zufaellige
+// Lauf-/Sprung-Folgen aus und merkt sich jeden neu erreichten Ort ("Go-Explore"). Ist das Ziel
+// gefunden, wird der Weg einmal sauber von vorne gespielt, damit das Level normal geschafft wird.
+// =====================================================================
+constexpr float STEP_DT = 1.f / 240.f;
+constexpr int B_JUMP = 1, B_LEFT = 2, B_RIGHT = 3;
+
+struct Ev {
+    int tick;
+    int btn;
+    bool down;
+};
+
+struct Node {
+    Ref<CheckpointObject> cp;
+    std::shared_ptr<Node> parent;   // Zustand, von dem aus die Episode gestartet ist
+    std::vector<Ev> seg;            // Eingaben ab dem Laden von parent (Ticks relativ dazu)
+    int segTicks = 0;
+    int total = 0;
+    float x = 0.f, y = 0.f;
+    int chosen = 0;
+    int found = 0;
+    bool inSection = false;
+};
+using NodeP = std::shared_ptr<Node>;
+
+struct Segment {
+    NodeP from;
+    std::vector<Ev> evs;
+    int ticks = 0;
+};
+
+class PBot {
+public:
+    enum class Mode { Off, Search, Final };
+
+    static PBot& get() {
+        static PBot bot;
+        return bot;
+    }
+
+    Mode mode = Mode::Off;
+    bool active() const { return mode != Mode::Off; }
+    bool searching() const { return mode == Mode::Search; }
+
+    PlayLayer* pl = nullptr;
+    bool inStep = false;
+    bool inRestore = false;
+    bool inCheckpointActivated = false;
+    bool botInput = false;
+    bool dead = false;
+    bool reached = false;
+    std::string failReason;
+
+    NodeP root;
+    NodeP best;
+    std::unordered_map<int64_t, NodeP> cells;
+    std::mt19937 rng{1234567u};
+    double tStart = 0;
+    double tInfo = 0;
+    long long steps = 0;
+    int episodes = 0;
+    float minX = 0, maxX = 0;
+
+    struct Episode {
+        NodeP start;
+        bool running = false;
+        int tick = 0;
+        int maxTicks = 0;
+        std::vector<Ev> evs;
+        int h = 0;
+        int actLeft = 0;
+        int jumpPress = -1;
+        int jumpRelease = -1;
+        bool held[4] = {false, false, false, false};
+        float lastX = 0, lastY = 0;
+        int still = 0;
+    } ep;
+
+    // Sauberer Lauf am Ende
+    std::vector<Segment> plan;
+    std::vector<Ev> flat;
+    int flatTicks = 0;
+    bool segmentedFinal = false;
+    size_t fIdx = 0;
+    int fTick = 0;
+    size_t segIdx = 0;
+    size_t evIdx = 0;
+    double acc = 0;
+
+    std::vector<Ref<GameObject>> dummies;   // unsichtbare Checkpoint-Objekte
+    float savedMusic = -1.f, savedSfx = -1.f;
+    Ref<CCNode> overlay;
+    CCLabelBMFont* infoLabel = nullptr;
+
+    static int maxCells() { return static_cast<int>(Mod::get()->getSettingValue<int64_t>("plat-max-cells")); }
+    static double maxSearchSec() { return 60.0 * Mod::get()->getSettingValue<int64_t>("plat-search-minutes"); }
+    static double budget() { return Mod::get()->getSettingValue<int64_t>("plat-frame-budget-ms") / 1000.0; }
+
+    // ---------- Start / Stopp ----------
+    void begin(PlayLayer* layer) {
+        if (active() || !layer) return;
+        pl = layer;
+        failReason.clear();
+        auto fm = FMODAudioEngine::sharedEngine();
+        savedMusic = fm->m_musicVolume;
+        savedSfx = fm->m_sfxVolume;
+        fm->setBackgroundMusicVolume(0.f);
+        fm->setEffectsVolume(0.f);
+
+        // Sauberer Start: Level von vorne, dieser Zustand ist die Wurzel der Suche
+        inRestore = true;
+        botInput = true;
+        pl->resetLevelFromStart();
+        botInput = false;
+        inRestore = false;
+        releaseAll();
+
+        cells.clear();
+        plan.clear();
+        flat.clear();
+        steps = 0;
+        episodes = 0;
+        ep = Episode{};
+        dead = reached = false;
+        root = makeNode(nullptr, {}, 0);
+        if (!root) {
+            fail("Spielzustand liess sich nicht speichern");
+            return;
+        }
+        cells[cellKey()] = root;
+        best = root;
+        minX = maxX = root->x;
+        mode = Mode::Search;
+        tStart = nowSec();
+        tInfo = 0;
+        buildOverlay();
+        log::info("Platformer-Bot sucht ...");
+    }
+
+    void restoreSound() {
+        if (savedMusic >= 0.f) {
+            auto fm = FMODAudioEngine::sharedEngine();
+            fm->setBackgroundMusicVolume(savedMusic);
+            fm->setEffectsVolume(savedSfx);
+            savedMusic = savedSfx = -1.f;
+        }
+    }
+
+    void clearSearch() {
+        cells.clear();
+        plan.clear();
+        flat.clear();
+        ep = Episode{};
+        best = nullptr;
+        root = nullptr;
+    }
+
+    // Abbruch mit Grund (der Demon-Bot ueberspringt dann das Level)
+    void fail(std::string const& why) {
+        log::info("Platformer-Bot: {}", why);
+        failReason = why;
+        if (pl && mode != Mode::Off) releaseAll();
+        mode = Mode::Off;
+        removeOverlay();
+        restoreSound();
+        clearSearch();
+    }
+
+    // Ziel erreicht: ab hier laeuft das Spiel wieder normal (Abschluss-Animation usw.)
+    void handover() {
+        mode = Mode::Off;
+        removeOverlay();
+        restoreSound();
+        clearSearch();
+    }
+
+    void shutdown(bool playLayerAlive) {
+        if (playLayerAlive && pl && mode != Mode::Off) releaseAll();
+        mode = Mode::Off;
+        removeOverlay();
+        restoreSound();
+        clearSearch();
+        failReason.clear();
+        inStep = inRestore = botInput = inCheckpointActivated = false;
+        if (!playLayerAlive) {
+            dummies.clear();
+            pl = nullptr;
+        }
+    }
+
+    // ---------- Spielzustaende ----------
+    NodeP makeNode(NodeP parent, std::vector<Ev> const& evs, int segTicks) {
+        auto cp = pl->createCheckpoint();
+        if (!cp) return nullptr;
+        auto pos = pl->m_player1->getPosition();
+        // Unsichtbares Ersatz-Objekt, wie bei Practice-Checkpoints (das Spiel erwartet eins)
+        auto obj = GameObject::createWithFrame("square_01_001.png");
+        obj->m_objectID = 44;
+        obj->m_objectType = GameObjectType::Decoration;
+        obj->m_glowSprite = nullptr;
+        obj->m_isDisabled2 = true;
+        obj->m_isInvisible = true;
+        obj->setOpacity(0);
+        obj->setStartPos(pos);
+        obj->retain();
+        CC_SAFE_RELEASE(cp->m_physicalCheckpointObject);
+        cp->m_physicalCheckpointObject = obj;
+
+        auto n = std::make_shared<Node>();
+        n->cp = cp;
+        n->parent = parent;
+        n->seg = evs;
+        n->segTicks = segTicks;
+        n->total = (parent ? parent->total : 0) + segTicks;
+        n->x = pos.x;
+        n->y = pos.y;
+        return n;
+    }
+
+    void ensureInSection(NodeP const& n) {
+        if (n->inSection) return;
+        auto obj = n->cp->m_physicalCheckpointObject;
+        if (!obj) return;
+        pl->addToSection(obj);
+        obj->activateObject();
+        n->inSection = true;
+        dummies.push_back(obj);
+    }
+
+    void releaseAll() {
+        botInput = true;
+        for (int b = 1; b <= 3; b++) pl->handleButton(false, b, true);
+        botInput = false;
+    }
+
+    void restore(NodeP const& n) {
+        ensureInSection(n);
+        inRestore = true;
+        botInput = true;
+        pl->m_checkpointArray->removeAllObjects();
+        pl->m_checkpointArray->addObject(n->cp);
+        pl->resetLevel();
+        botInput = false;
+        inRestore = false;
+        releaseAll();
+        dead = false;
+        reached = false;
+    }
+
+    void step() {
+        inStep = true;
+        pl->update(STEP_DT);
+        inStep = false;
+        steps++;
+    }
+
+    int64_t cellKey() const {
+        auto p = pl->m_player1;
+        int cx = static_cast<int>(std::floor(p->getPositionX() / 24.f));
+        int cy = static_cast<int>(std::floor(p->getPositionY() / 24.f));
+        int m = p->m_isShip ? 1 : p->m_isBall ? 2 : p->m_isBird ? 3 : p->m_isDart ? 4
+              : p->m_isRobot ? 5 : p->m_isSpider ? 6 : p->m_isSwing ? 7 : 0;
+        int up = p->m_isUpsideDown ? 1 : 0;
+        return ((static_cast<int64_t>(cx) + 1000000) * 4000000 + (static_cast<int64_t>(cy) + 1000000)) * 16 + m * 2 + up;
+    }
+
+    // ---------- Suche ----------
+    double rnd() { return std::uniform_real_distribution<double>(0.0, 1.0)(rng); }
+    int rndInt(int a, int b) { return std::uniform_int_distribution<int>(a, b)(rng); }
+
+    NodeP pickNode() {
+        std::vector<NodeP> nodes;
+        std::vector<double> w;
+        nodes.reserve(cells.size());
+        w.reserve(cells.size());
+        float range = std::max(1.f, maxX - minX);
+        for (auto& [k, n] : cells) {
+            double prog = (n->x - minX) / range;
+            nodes.push_back(n);
+            w.push_back(1.0 / std::sqrt(1.0 + n->chosen) * (1.0 + 0.8 * prog) + 0.3 * n->found / (1.0 + n->chosen));
+        }
+        if (nodes.empty()) return root;
+        std::discrete_distribution<size_t> d(w.begin(), w.end());
+        return nodes[d(rng)];
+    }
+
+    bool evictOne() {
+        int64_t worstKey = 0;
+        double worst = -1e18;
+        for (auto& [k, n] : cells) {
+            if (n == root || n == ep.start || n == best || n->chosen < 3) continue;
+            double score = n->chosen - 3.0 * n->found;
+            if (score > worst) { worst = score; worstKey = k; }
+        }
+        if (worst <= -1e17) return false;
+        cells.erase(worstKey);
+        return true;
+    }
+
+    void setHeld(int b, bool want) {
+        if (ep.held[b] == want) return;
+        botInput = true;
+        pl->handleButton(want, b, true);
+        botInput = false;
+        ep.evs.push_back({ep.tick, b, want});
+        ep.held[b] = want;
+    }
+
+    void chooseAction() {
+        if (!(ep.tick > 0 && rnd() < 0.6)) {
+            double r = rnd();
+            ep.h = r < 0.5 ? 1 : (r < 0.78 ? -1 : 0);
+        }
+        double j = rnd();
+        if (j < 0.35) {
+            ep.jumpPress = -1;
+        } else if (j < 0.6) {
+            ep.jumpPress = ep.tick;
+            ep.jumpRelease = ep.tick + rndInt(2, 8);
+        } else {
+            ep.jumpPress = ep.tick;
+            ep.jumpRelease = ep.tick + rndInt(12, 60);
+        }
+        ep.actLeft = rndInt(8, 48);
+    }
+
+    void startEpisode() {
+        NodeP n = pickNode();
+        n->chosen++;
+        restore(n);
+        ep = Episode{};
+        ep.start = n;
+        ep.running = true;
+        ep.maxTicks = rndInt(240 * 2, 240 * 6);
+        ep.lastX = pl->m_player1->getPositionX();
+        ep.lastY = pl->m_player1->getPositionY();
+        episodes++;
+    }
+
+    void noteBounds(NodeP const& n) {
+        minX = std::min(minX, n->x);
+        maxX = std::max(maxX, n->x);
+        if (!best || n->x > best->x) best = n;
+    }
+
+    void considerCell() {
+        int64_t key = cellKey();
+        int total = ep.start->total + ep.tick;
+        auto it = cells.find(key);
+        if (it == cells.end()) {
+            if (static_cast<int>(cells.size()) >= maxCells() && !evictOne()) return;
+            auto n = makeNode(ep.start, ep.evs, ep.tick);
+            if (!n) return;
+            cells[key] = n;
+            ep.start->found++;
+            noteBounds(n);
+        } else if (total + 48 < it->second->total) {
+            auto n = makeNode(ep.start, ep.evs, ep.tick);
+            if (!n) return;
+            n->chosen = it->second->chosen;
+            n->found = it->second->found;
+            if (it->second == best) best = n;
+            it->second = n;
+            noteBounds(n);
+        }
+    }
+
+    void searchTick() {
+        if (!ep.running) {
+            startEpisode();
+            return;
+        }
+        if (ep.actLeft <= 0) chooseAction();
+        setHeld(B_LEFT, ep.h < 0);
+        setHeld(B_RIGHT, ep.h > 0);
+        if (ep.tick == ep.jumpRelease) setHeld(B_JUMP, false);
+        if (ep.tick == ep.jumpPress) {
+            if (ep.held[B_JUMP]) {
+                setHeld(B_JUMP, false);   // erst loslassen, im naechsten Tick neu druecken
+                ep.jumpPress = ep.tick + 1;
+                if (ep.jumpRelease <= ep.jumpPress) ep.jumpRelease = ep.jumpPress + 3;
+            } else {
+                setHeld(B_JUMP, true);
+            }
+        }
+        step();
+        ep.tick++;
+        ep.actLeft--;
+        if (reached) {
+            onGoalFound();
+            return;
+        }
+        if (dead) {
+            ep.running = false;
+            return;
+        }
+        float x = pl->m_player1->getPositionX();
+        float y = pl->m_player1->getPositionY();
+        if (std::abs(x - ep.lastX) < 2.f && std::abs(y - ep.lastY) < 2.f) {
+            ep.still++;
+        } else {
+            ep.still = 0;
+            ep.lastX = x;
+            ep.lastY = y;
+        }
+        considerCell();
+        if (ep.tick >= ep.maxTicks || ep.still > 360) ep.running = false;
+    }
+
+    void onGoalFound() {
+        log::info("Weg gefunden: {} Versuche, {} Schritte", episodes, steps);
+        plan.clear();
+        std::vector<NodeP> chain;
+        for (NodeP n = ep.start; n; n = n->parent) chain.push_back(n);
+        std::reverse(chain.begin(), chain.end());
+        for (size_t i = 1; i < chain.size(); i++) plan.push_back({chain[i - 1], chain[i]->seg, chain[i]->segTicks});
+        plan.push_back({ep.start, ep.evs, ep.tick});
+        ep.running = false;
+        startFinal();
+    }
+
+    // ---------- Sauberer Lauf ----------
+    // Erst am Stueck von vorne (normaler Durchlauf); klappt das nicht, in Abschnitten.
+    void startFinal() {
+        flat.clear();
+        int off = 0;
+        for (size_t k = 0; k < plan.size(); k++) {
+            if (k > 0) {
+                for (int b = 1; b <= 3; b++) flat.push_back({off, b, false});
+            }
+            for (auto const& e : plan[k].evs) flat.push_back({off + e.tick, e.btn, e.down});
+            off += plan[k].ticks;
+        }
+        flatTicks = off;
+        removeOverlay();
+        mode = Mode::Final;
+        segmentedFinal = false;
+        fIdx = 0;
+        fTick = 0;
+        acc = 0;
+        inRestore = true;
+        botInput = true;
+        pl->resetLevelFromStart();
+        botInput = false;
+        inRestore = false;
+        releaseAll();
+        dead = reached = false;
+    }
+
+    void startSegmentedFinal() {
+        log::info("Lauf am Stueck weicht ab -> Abschnitte");
+        segmentedFinal = true;
+        segIdx = 0;
+        evIdx = 0;
+        fTick = 0;
+    }
+
+    // false = Lauf (vorerst) vorbei
+    bool finalTick() {
+        if (!segmentedFinal) {
+            while (fIdx < flat.size() && flat[fIdx].tick <= fTick) {
+                botInput = true;
+                pl->handleButton(flat[fIdx].down, flat[fIdx].btn, true);
+                botInput = false;
+                fIdx++;
+            }
+            step();
+            fTick++;
+            if (mode != Mode::Final) return false;   // Ziel erreicht -> Spiel uebernimmt
+            if (dead || fTick > flatTicks + 600) startSegmentedFinal();
+            return true;
+        }
+        if (segIdx >= plan.size()) {
+            fail("Weg funktioniert beim Nachspielen nicht");
+            return false;
+        }
+        auto& s = plan[segIdx];
+        if (fTick == 0) {
+            restore(s.from);
+            evIdx = 0;
+        }
+        while (evIdx < s.evs.size() && s.evs[evIdx].tick <= fTick) {
+            botInput = true;
+            pl->handleButton(s.evs[evIdx].down, s.evs[evIdx].btn, true);
+            botInput = false;
+            evIdx++;
+        }
+        step();
+        fTick++;
+        if (mode != Mode::Final) return false;
+        if (dead) {
+            fail("Weg funktioniert beim Nachspielen nicht");
+            return false;
+        }
+        if (fTick >= s.ticks) {
+            segIdx++;
+            fTick = 0;
+        }
+        return true;
+    }
+
+    // ---------- Pro Bild (statt des normalen Spiel-Updates) ----------
+    void frame(float dt) {
+        if (pl->m_isPaused) return;
+        double t0 = nowSec();
+        if (mode == Mode::Search) {
+            double limit = budget();
+            while (mode == Mode::Search && nowSec() - t0 < limit) searchTick();
+            if (mode != Mode::Search) return;
+            double el = t0 - tStart;
+            if (el > maxSearchSec()) {
+                fail("kein Weg gefunden (Zeitlimit)");
+            } else if (t0 - tInfo > 0.25 && infoLabel && root) {
+                tInfo = t0;
+                infoLabel->setString(fmt::format(
+                    "Zeit: {}:{:02}   Versuche: {}\nOrte: {}   Weitester Punkt: {:.0f} Bloecke",
+                    static_cast<int>(el) / 60, static_cast<int>(el) % 60, episodes, cells.size(),
+                    (maxX - root->x) / 30.f).c_str());
+            }
+        } else if (mode == Mode::Final) {
+            acc += dt * 240.0;
+            int n = std::min(static_cast<int>(acc), 3000);
+            acc -= n;
+            for (int i = 0; i < n && mode == Mode::Final; i++) {
+                if (!finalTick()) break;
+            }
+        }
+    }
+
+    // ---------- Anzeige ----------
+    void removeOverlay() {
+        if (overlay) overlay->removeFromParent();
+        overlay = nullptr;
+        infoLabel = nullptr;
+    }
+
+    void buildOverlay() {
+        removeOverlay();
+        auto win = CCDirector::get()->getWinSize();
+        auto layer = CCLayerColor::create({0, 0, 0, 215}, win.width, win.height);
+        layer->setID("platformer-search"_spr);
+
+        auto title = CCLabelBMFont::create("Bot sucht einen Weg ...", "goldFont.fnt");
+        title->setScale(0.8f);
+        title->setPosition({win.width / 2, win.height / 2 + 40.f});
+        layer->addChild(title);
+
+        infoLabel = CCLabelBMFont::create("Starte ...", "bigFont.fnt");
+        infoLabel->setScale(0.35f);
+        infoLabel->setAlignment(kCCTextAlignmentCenter);
+        infoLabel->setPosition({win.width / 2, win.height / 2 + 2.f});
+        layer->addChild(infoLabel);
+
+        pl->addChild(layer, 900);   // unter der Video-Anzeige (z 1000)
+        overlay = layer;
+    }
+};
 
 struct Entry {
     int id = 0;
@@ -152,9 +740,11 @@ public:
 
     // Position in der Suche
     int pass = 1;           // 1 = Hauptdurchlauf, 2 = Nachlese (verpasste Level einsammeln)
-    int mask = MASK_DEMONS; // ausgewaehlte Kategorien (Bit i = CATS[i])
+    int mask = MASK_DEMONS | TYPE_CLASSIC; // Auswahl: Bits 0..10 Schwierigkeiten, Bit 11 Classic, Bit 12 Platformer
     int cat = FIRST_DEMON;  // aktuelle Kategorie (Index in CATS)
     bool demonAll = false;  // Fallback, falls der Demon-Filter nicht greift: alle Demons gemischt
+    bool platLenFallback = false; // Fallback, falls der Server den Platformer-Filter nicht annimmt
+    bool pbotStarted = false;     // Platformer-Bot fuer das aktuelle Level schon gestartet
     int page = 0;
     int total = -1;
     int pageSize = 10;
@@ -212,17 +802,26 @@ public:
     double maxGame() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("max-game-seconds")); }
 
     int firstCat() const { return nextInMask(mask, -1); }
-    int firstDemonCat() const { return nextInMask(mask, FIRST_DEMON - 1); }
+    // erste ausgewaehlte Demon-Kategorie im aktuellen Level-Typ
+    int firstDemonCat() const {
+        int base = catType(cat) * CAT_COUNT;
+        for (int c = base + FIRST_DEMON; c < base + CAT_COUNT; c++) if (inMask(mask, c)) return c;
+        return cat;
+    }
     bool allDemonsSelected() const { return (mask & MASK_DEMONS) == MASK_DEMONS; }
-    bool isDemonCat() const { return cat >= FIRST_DEMON; }
+    bool isDemonCat() const { return catDiff(cat) >= FIRST_DEMON; }
+    bool isPlatCat() const { return catType(cat) == 1; }
     std::string filterLabel() const { return catLabel(cat, demonAll); }
     std::string diffLabel() const {
+        std::string d;
         if (isDemonCat() && demonAll) {
             auto e = entry();
             int c = e ? rawToCat(e->raw) : -1;
-            return c >= 0 ? CATS[c].single : "Demon";
+            d = c >= 0 ? CATS[c].single : "Demon";
+        } else {
+            d = CATS[catDiff(clampCat(cat))].single;
         }
-        return CATS[clampCat(cat)].single;
+        return isPlatCat() ? d + "  |  Platformer" : d;
     }
     Entry const* entry() const { return idx < list.size() ? &list[idx] : nullptr; }
 
@@ -233,6 +832,7 @@ public:
         m->setSavedValue<int>("mask", mask);
         m->setSavedValue<int>("cat", cat);
         m->setSavedValue<bool>("demon-all", demonAll);
+        m->setSavedValue<bool>("plat-len-fallback", platLenFallback);
         m->setSavedValue<int>("page", page);
         m->setSavedValue<int>("number", number);
         m->setSavedValue<int>("done", done);
@@ -253,16 +853,17 @@ public:
         pass = m->getSavedValue<int>("pass", 1);
         mask = m->getSavedValue<int>("mask", -1);
         if (mask < 0) mask = legacyMask();
-        mask &= MASK_ALL;
-        if (mask == 0) mask = MASK_DEMONS;
+        mask = fixMask(mask);
+        if ((mask & DIFF_BITS) == 0) mask |= MASK_DEMONS;
         cat = m->getSavedValue<int>("cat", -1);
         demonAll = m->getSavedValue<bool>("demon-all", false);
+        platLenFallback = m->getSavedValue<bool>("plat-len-fallback", false);
         if (cat < 0) {
             // Stand aus Version 1.0 (nur Demons) uebernehmen
             int f = m->getSavedValue<int>("filter", 1);
             cat = FIRST_DEMON + std::clamp(f, 1, 5) - 1;
             demonAll = m->getSavedValue<bool>("all-mode", false);
-            mask = MASK_DEMONS;
+            mask = MASK_DEMONS | TYPE_CLASSIC;
         }
         page = m->getSavedValue<int>("page", 0);
         number = m->getSavedValue<int>("number", 0);
@@ -285,7 +886,7 @@ public:
     }
 
     void resetProgress() {
-        pass = 1; demonAll = false; page = 0;
+        pass = 1; demonAll = false; platLenFallback = false; page = 0;
         number = 0; done = 0; skipped = 0; already = 0;
         failedText.clear(); failedIds.clear();
     }
@@ -301,7 +902,7 @@ public:
         if (c < 0) {
             c = FIRST_DEMON + std::clamp(m->getSavedValue<int>("filter", 1), 1, 5) - 1;
             all = m->getSavedValue<bool>("all-mode", false);
-            mk = MASK_DEMONS;
+            mk = MASK_DEMONS | TYPE_CLASSIC;
         }
         return fmt::format("{}\nGerade: {}, Seite {} (geschafft: {})",
             maskLabel(mk), catLabel(c, all), m->getSavedValue<int>("page", 0) + 1, m->getSavedValue<int>("done", 0));
@@ -331,15 +932,15 @@ public:
     }
 
     // ---------- Start / Stopp ----------
-    void start(bool resume, int newMask = MASK_DEMONS) {
+    void start(bool resume, int newMask = MASK_DEMONS | TYPE_CLASSIC) {
         if (running) return;
         if (isProtectedAccount()) return;
         if (resume) {
             loadProgress();
         } else {
             resetProgress();
-            mask = newMask & MASK_ALL;
-            if (mask == 0) mask = MASK_DEMONS;
+            mask = fixMask(newMask);
+            if ((mask & DIFF_BITS) == 0) mask |= MASK_DEMONS;
             cat = firstCat();
         }
         running = true;
@@ -367,6 +968,7 @@ public:
         running = false;
         ph = Ph::Idle;
         releaseDelegates();
+        if (PBot::get().active()) PBot::get().shutdown(true);
         Mod::get()->setSavedValue<bool>("running", false);
         writeReport();
         saveAll();
@@ -442,10 +1044,10 @@ public:
     void requestPage(double t) {
         if (t - tLastReq < gap()) return;
         auto so = GJSearchObject::create(
-            SearchType::Recent, "", CATS[cat].diff, "-", page,
+            SearchType::Recent, "", CATS[catDiff(cat)].diff, isPlatCat() && !platLenFallback ? "5" : "-", page,
             true,   // nur bewertete Level
             false, false, 0, false, false, false, false, false, false, false, false, false, false,
-            isDemonCat() && !demonAll ? CATS[cat].demonFilter : 0, 0, 0
+            isDemonCat() && !demonAll ? CATS[catDiff(cat)].demonFilter : 0, 0, 0
         );
         auto glm = GameLevelManager::get();
         std::string key = so->getKey();
@@ -494,6 +1096,19 @@ public:
         log::info("{} Seite {}: {} Level (gesamt {})", filterLabel(), page + 1, list.size(), total);
         if (list.empty()) { endOfFilter(); return; }
 
+        // Selbsttest: liefert der Platformer-Filter wirklich Platformer-Level?
+        if (isPlatCat() && !platLenFallback && page == 0) {
+            bool anyPlat = false;
+            for (auto& e : list) anyPlat = anyPlat || e.platformer;
+            if (!anyPlat) {
+                log::warn("Platformer-Filter greift nicht -> Platformer werden aus allen Leveln herausgesucht");
+                platLenFallback = true;
+                total = -1; list.clear();
+                ph = Ph::Page;
+                return;
+            }
+        }
+
         // Selbsttest: greift der Schwierigkeitsfilter? Dann haben (fast) alle Level dieselbe Demon-Stufe.
         if (isDemonCat() && !demonAll && page == 0 && list.size() >= 3) {
             std::map<int, int> count;
@@ -523,6 +1138,12 @@ public:
             return;
         }
         retries = 0;
+        if (page == 0 && isPlatCat() && !platLenFallback) {
+            // Platformer-Filter wird vom Server evtl. nicht angenommen
+            platLenFallback = true; total = -1;
+            ph = Ph::Page;
+            return;
+        }
         if (page == 0 && isDemonCat() && !demonAll) {
             // Demon-Filterwert wird vom Server evtl. nicht angenommen
             demonAll = true; cat = firstDemonCat(); total = -1;
@@ -536,7 +1157,9 @@ public:
 
     void endOfFilter() {
         page = 0; total = -1; list.clear(); idx = 0;
-        int next = (isDemonCat() && demonAll) ? -1 : nextInMask(mask, cat);
+        // Im Notfall-Modus "Demons gemischt" sind alle Demon-Stufen eines Typs schon erledigt
+        int next = (isDemonCat() && demonAll) ? nextInMask(mask, (catType(cat) + 1) * CAT_COUNT - 1)
+                                              : nextInMask(mask, cat);
         if (next >= 0) {
             cat = next;
             ph = Ph::Page;
@@ -564,11 +1187,11 @@ public:
         auto gsm = GameStatsManager::get();
         while (idx < list.size()) {
             auto& e = list[idx];
-            if (e.platformer || failedIds.count(e.id)) { idx++; continue; }
+            if (e.platformer != isPlatCat() || failedIds.count(e.id)) { idx++; continue; }
             if (isDemonCat() && demonAll && !allDemonsSelected()) {
                 // Notfall-Modus: Demon-Stufen, die nicht ausgewaehlt sind, auslassen
                 int c = rawToCat(e.raw);
-                if (c >= 0 && !inMask(mask, c)) { idx++; continue; }
+                if (c >= 0 && !diffInMask(mask, c)) { idx++; continue; }
             }
             if (gsm->hasCompletedOnlineLevel(e.id)) {
                 if (pass == 1) already++;
@@ -626,6 +1249,7 @@ public:
         if (!current) { ph = Ph::Next; return; }
         number++;
         resets = 0;
+        pbotStarted = false;
         completed = false;
         endShown = false;
         bestPct = 0;
@@ -681,6 +1305,10 @@ public:
             if ((endShown && t - tEnd > 0.8) || t - tCompleted > 8.0) leaveLevel(pl, true, "");
             return;
         }
+        if (pl->m_isPlatformer) {
+            watchPlatformer(pl, t);
+            return;
+        }
         if (resets >= 3) {
             stop("Der Spieler stirbt immer wieder. Ist Noclip in Eclipse an?");
             return;
@@ -705,6 +1333,28 @@ public:
             leaveLevel(pl, false, fmt::format("Zeitlimit bei {}%", static_cast<int>(bestPct)));
             return;
         }
+    }
+
+    // Platformer: Noclip allein reicht nicht, der Platformer-Bot sucht erst einen Weg
+    void watchPlatformer(PlayLayer* pl, double t) {
+        auto& pb = PBot::get();
+        if (!pbotStarted) {
+            if (t - tPhase > 1.0 && !typeinfo_cast<CCTransitionScene*>(CCDirector::get()->getRunningScene())) {
+                pbotStarted = true;
+                pb.begin(pl);
+            }
+            return;
+        }
+        if (!pb.failReason.empty()) {
+            auto why = pb.failReason;
+            pb.failReason.clear();
+            leaveLevel(pl, false, why);
+            return;
+        }
+        if (pb.active()) return;   // sucht oder spielt gerade
+        // Weg wurde gespielt, Spiel macht die Abschluss-Animation: kurz warten
+        double limit = PBot::maxSearchSec() + maxReal();
+        if (t - tLevelStart > limit) leaveLevel(pl, false, "Zeitlimit (Platformer)");
     }
 
     // ---------- GD-Callbacks ----------
@@ -751,7 +1401,7 @@ public:
             ph = Ph::Next;
             return;
         }
-        if (level->isPlatformer()) { idx++; ph = Ph::Next; return; }
+        if (level->isPlatformer() != isPlatCat()) { idx++; ph = Ph::Next; return; }
         current = level;
         ph = Ph::Play;
     }
@@ -776,6 +1426,7 @@ public:
         tEnd = nowSec();
     }
     void onReset(PlayLayer* pl) {
+        if (PBot::get().active()) return;   // der Platformer-Bot laedt staendig Zustaende
         if (controls(pl) && pl->m_gameState.m_levelTime > 1.0) resets++;
     }
 };
@@ -795,48 +1446,67 @@ CCSprite* diffIcon(int c) {
 // Auswahl, welche Schwierigkeiten gespielt werden; danach neu starten
 class ChoosePopup : public Popup {
 protected:
-    int m_mask = MASK_DEMONS;
+    int m_mask = MASK_DEMONS | TYPE_CLASSIC;
     CCMenuItemToggler* m_togglers[CAT_COUNT] = {};
 
+    void addLabel(const char* text, float x, float y, float scale) {
+        auto lbl = CCLabelBMFont::create(text, "bigFont.fnt");
+        lbl->setScale(scale);
+        lbl->setAnchorPoint({0.f, 0.5f});
+        m_mainLayer->addChildAtPosition(lbl, Anchor::BottomLeft, {x, y});
+    }
+
     bool init() {
-        constexpr float W = 400.f, H = 290.f;
+        constexpr float W = 400.f, H = 305.f;
         if (!Popup::init(W, H)) return false;
         this->setTitle("Was soll gespielt werden?");
 
         m_mask = Mod::get()->getSavedValue<int>("selection-mask", -1);
         if (m_mask < 0) m_mask = legacyMask();
-        m_mask &= MASK_ALL;
+        m_mask = fixMask(m_mask);
+
+        // Oben: Level-Typ
+        const int typeBits[2] = {TYPE_CLASSIC, TYPE_PLAT};
+        const char* typeNames[2] = {"Classic", "Platformer"};
+        for (int t = 0; t < 2; t++) {
+            float x = t == 0 ? 70.f : 225.f;
+            float y = H - 50.f;
+            int bit = typeBits[t];
+            auto tog = CCMenuItemExt::createTogglerWithStandardSprites(0.65f, [this, bit](CCMenuItemToggler*) {
+                m_mask ^= bit;
+            });
+            tog->toggle((m_mask & bit) != 0);
+            m_buttonMenu->addChildAtPosition(tog, Anchor::BottomLeft, {x, y});
+            addLabel(typeNames[t], x + 18.f, y, 0.5f);
+        }
 
         // Links: normale Schwierigkeiten, rechts: Demons
         for (int i = 0; i < CAT_COUNT; i++) {
             bool demon = i >= FIRST_DEMON;
             int row = demon ? i - FIRST_DEMON : i;
             float x = demon ? 195.f : 28.f;
-            float y = H - 56.f - row * 27.f;
+            float y = H - 82.f - row * 24.f;
 
-            auto tog = CCMenuItemExt::createTogglerWithStandardSprites(0.6f, [this, i](CCMenuItemToggler*) {
+            auto tog = CCMenuItemExt::createTogglerWithStandardSprites(0.55f, [this, i](CCMenuItemToggler*) {
                 m_mask ^= (1 << i);
             });
-            tog->toggle(inMask(m_mask, i));
+            tog->toggle(diffInMask(m_mask, i));
             m_buttonMenu->addChildAtPosition(tog, Anchor::BottomLeft, {x, y});
             m_togglers[i] = tog;
 
-            float lx = x + 18.f;
+            float lx = x + 17.f;
             if (auto icon = diffIcon(i)) {
-                icon->setScale(0.42f);
-                m_mainLayer->addChildAtPosition(icon, Anchor::BottomLeft, {lx + 10.f, y});
-                lx += 24.f;
+                icon->setScale(0.38f);
+                m_mainLayer->addChildAtPosition(icon, Anchor::BottomLeft, {lx + 9.f, y});
+                lx += 22.f;
             }
-            auto lbl = CCLabelBMFont::create(CATS[i].single, "bigFont.fnt");
-            lbl->setScale(0.38f);
-            lbl->setAnchorPoint({0.f, 0.5f});
-            m_mainLayer->addChildAtPosition(lbl, Anchor::BottomLeft, {lx, y});
+            addLabel(CATS[i].single, lx, y, 0.36f);
         }
 
-        // Schnellauswahl
+        // Schnellauswahl (nur Schwierigkeiten)
         auto quick = [this](const char* text, float x, int mask) {
             auto spr = ButtonSprite::create(text, "bigFont.fnt", "GJ_button_04.png", 0.55f);
-            auto btn = CCMenuItemExt::createSpriteExtra(spr, [this, mask](CCMenuItemSpriteExtra*) { this->setMask(mask); });
+            auto btn = CCMenuItemExt::createSpriteExtra(spr, [this, mask](CCMenuItemSpriteExtra*) { this->setDiffs(mask); });
             m_buttonMenu->addChildAtPosition(btn, Anchor::Bottom, {x, 60.f});
         };
         quick("Alle", -110.f, MASK_ALL);
@@ -849,16 +1519,20 @@ protected:
         return true;
     }
 
-    void setMask(int mask) {
-        m_mask = mask & MASK_ALL;
+    void setDiffs(int diffs) {
+        m_mask = (m_mask & ~DIFF_BITS) | (diffs & DIFF_BITS);
         for (int i = 0; i < CAT_COUNT; i++) {
-            if (m_togglers[i]) m_togglers[i]->toggle(inMask(m_mask, i));
+            if (m_togglers[i]) m_togglers[i]->toggle(diffInMask(m_mask, i));
         }
     }
 
     void onStart() {
-        if ((m_mask & MASK_ALL) == 0) {
+        if ((m_mask & DIFF_BITS) == 0) {
             Notification::create("Waehle mindestens eine Schwierigkeit aus", NotificationIcon::Warning)->show();
+            return;
+        }
+        if ((m_mask & (TYPE_CLASSIC | TYPE_PLAT)) == 0) {
+            Notification::create("Waehle Classic und/oder Platformer aus", NotificationIcon::Warning)->show();
             return;
         }
         int mask = m_mask;
@@ -983,6 +1657,7 @@ class $modify(BotMenuLayer, MenuLayer) {
 // ---------- Level: Anzeige fuers Video, Ende erkennen, Auto-Pause verhindern ----------
 class $modify(BotPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        PBot::get().shutdown(false);   // neues Level: alten Platformer-Zustand vergessen
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
         auto bot = DemonBot::get();
         auto e = bot->entry();
@@ -1015,8 +1690,70 @@ class $modify(BotPlayLayer, PlayLayer) {
     }
 
     void levelComplete() {
+        auto& pb = PBot::get();
+        if (pb.active() && pb.pl == this) {
+            if (pb.searching()) {
+                pb.reached = true;   // Ziel bei der Suche gefunden: noch NICHT abschliessen
+                return;
+            }
+            pb.handover();           // sauberer Lauf: ab hier normal abschliessen
+        }
         PlayLayer::levelComplete();
         DemonBot::get()->onLevelComplete(this);
+    }
+
+    void playPlatformerEndAnimationToPos(CCPoint pos, bool instant) {
+        auto& pb = PBot::get();
+        if (pb.active() && pb.pl == this) {
+            if (pb.searching()) {
+                pb.reached = true;
+                return;
+            }
+            pb.handover();
+        }
+        PlayLayer::playPlatformerEndAnimationToPos(pos, instant);
+    }
+
+    void destroyPlayer(PlayerObject* player, GameObject* object) {
+        auto& pb = PBot::get();
+        if (pb.active() && pb.pl == this && object != m_anticheatSpike) {
+            pb.dead = true;   // merken, aber nicht wirklich sterben
+            return;
+        }
+        PlayLayer::destroyPlayer(player, object);
+    }
+
+    void checkpointActivated(CheckpointGameObject* object) {
+        auto& pb = PBot::get();
+        pb.inCheckpointActivated = true;
+        PlayLayer::checkpointActivated(object);
+        pb.inCheckpointActivated = false;
+    }
+
+    // Keine automatischen Practice-Checkpoints, solange der Platformer-Bot laeuft
+    CheckpointObject* markCheckpoint() {
+        auto& pb = PBot::get();
+        if (pb.active() && pb.pl == this && !pb.inCheckpointActivated) return nullptr;
+        return PlayLayer::markCheckpoint();
+    }
+
+    void updateVisibility(float dt) {
+        PlayLayer::updateVisibility(dt);
+        auto& pb = PBot::get();
+        if (pb.pl == this) {
+            for (auto& obj : pb.dummies) obj->setOpacity(0);
+        }
+    }
+
+    void resetLevelFromStart() {
+        auto& pb = PBot::get();
+        if (pb.active() && pb.pl == this && !pb.inRestore) pb.shutdown(true);
+        PlayLayer::resetLevelFromStart();
+    }
+
+    void onQuit() {
+        if (PBot::get().pl == this) PBot::get().shutdown(false);
+        PlayLayer::onQuit();
     }
 
     void showEndLayer() {
@@ -1036,6 +1773,44 @@ class $modify(BotPlayLayer, PlayLayer) {
             bot->stop("Von dir pausiert.");      // ESC / Pause = Bot anhalten
         }
         PlayLayer::pauseGame(unfocused);
+    }
+};
+
+// ---------- Platformer-Bot steuert die Zeit und die Eingaben selbst ----------
+class $modify(BotGameLayer, GJBaseGameLayer) {
+    void update(float dt) {
+        auto& pb = PBot::get();
+        if (pb.active() && !pb.inStep && pb.pl && static_cast<GJBaseGameLayer*>(pb.pl) == this) {
+            pb.frame(dt);
+            return;
+        }
+        GJBaseGameLayer::update(dt);
+    }
+
+    void handleButton(bool down, int button, bool isPlayer1) {
+        auto& pb = PBot::get();
+        if (pb.active() && !pb.botInput && pb.pl && static_cast<GJBaseGameLayer*>(pb.pl) == this) return;
+        GJBaseGameLayer::handleButton(down, button, isPlayer1);
+    }
+};
+
+// ---------- Waehrend der Platformer-Suche nichts zaehlen (Spruenge, Coins usw.) ----------
+class $modify(BotStats, GameStatsManager) {
+    void incrementStat(char const* key, int amount) {
+        if (PBot::get().searching()) return;
+        GameStatsManager::incrementStat(key, amount);
+    }
+    void storeUserCoin(char const* key) {
+        if (PBot::get().searching()) return;
+        GameStatsManager::storeUserCoin(key);
+    }
+    void storeSecretCoin(char const* key) {
+        if (PBot::get().searching()) return;
+        GameStatsManager::storeSecretCoin(key);
+    }
+    void completedLevel(GJGameLevel* level) {
+        if (PBot::get().searching()) return;
+        GameStatsManager::completedLevel(level);
     }
 };
 
