@@ -283,6 +283,7 @@ struct Turbo {
     static inline bool running = false;
     static inline bool muted = false;
     static inline bool botStopped = false;  // Demon Bot wurde in diesem Level angehalten (ESC)
+    static inline bool completed = false;   // Level geschafft (Endanimation/Endbildschirm laufen normal)
 
     static State state(GJBaseGameLayer* gl) {
         if (!flag("enabled")) return State::Off;
@@ -290,13 +291,13 @@ struct Turbo {
         if (!pl || static_cast<GJBaseGameLayer*>(pl) != gl) return State::Off;
         if (pl->getChildByID(BOT_SEARCH)) return State::PowerOnly;   // Platformer-Bot teilt sich die Zeit selbst ein
         if (flag("only-demon-bot") && (botStopped || !pl->getChildByID(BOT_OVERLAY))) return State::Off;
-        if (pl->m_isPaused || pl->m_hasCompletedLevel || pl->m_levelEndAnimationStarted) return State::Off;
+        if (pl->m_isPaused || completed || pl->m_levelEndAnimationStarted) return State::Off;
         return State::Run;
     }
 
     static bool keepGoing(PlayLayer* pl) {
-        return PlayLayer::get() == pl && !pl->m_isPaused && !pl->m_hasCompletedLevel &&
-               !pl->m_levelEndAnimationStarted && !pl->getChildByID(BOT_SEARCH);
+        return PlayLayer::get() == pl && !pl->m_isPaused && !completed && !pl->m_levelEndAnimationStarted &&
+               !pl->getChildByID(BOT_SEARCH);
     }
 
     static void mute(bool on) {
@@ -385,6 +386,7 @@ struct Turbo {
         lastFrame = 0;
         shown = 0;
         botStopped = false;
+        completed = false;
         mute(false);
         if (newLevel) cost = 0.01;
     }
@@ -428,6 +430,17 @@ class $modify(TurboPlayLayer, PlayLayer) {
     void onQuit() {
         Turbo::reset(false);
         PlayLayer::onQuit();
+    }
+
+    void levelComplete() {
+        PlayLayer::levelComplete();
+        // waehrend der Platformer-Suche faengt der Demon Bot das Ziel ab: das ist noch kein Levelende
+        if (PlayLayer::get() == this && !this->getChildByID(BOT_SEARCH)) Turbo::completed = true;
+    }
+
+    void resetLevel() {
+        Turbo::completed = false;
+        PlayLayer::resetLevel();
     }
 
     void pauseGame(bool unfocused) {
