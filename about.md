@@ -8,8 +8,8 @@ erst Classic, dann Platformer.
 
 **Platformer:** Dort reicht Noclip nicht, man muss ja selbst laufen und springen. Der Bot sucht deshalb mit dem
 echten Spiel einen Weg zum Ziel (er probiert Laeufe und Spruenge aus und merkt sich, was weiter bringt) und
-spielt diesen Weg danach einmal sauber von vorne. Findet er in der eingestellten Zeit keinen Weg, wird das Level
-uebersprungen.
+spielt diesen Weg danach einmal sauber von vorne. Als Fortschritt zaehlen Level-Checkpoints, eingesammelte Items
+und die Naehe zum End-Trigger. Findet er in der eingestellten Zeit keinen Weg, wird das Level uebersprungen.
 
 **Noclip und Speedhack muessen in Eclipse (oder einem anderen Mod) an sein.** Der Bot selbst gibt keine Eingaben,
 er bedient nur das Menue.

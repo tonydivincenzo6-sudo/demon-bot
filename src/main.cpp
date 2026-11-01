@@ -160,11 +160,18 @@ int legacyMask() {
 // =====================================================================
 // Platformer-Bot: findet mit dem echten Spiel selbst einen Weg zum Ziel.
 //
-// Er speichert Spielzustaende (wie Platformer-Checkpoints), probiert von dort aus zufaellige
-// Lauf-/Sprung-Folgen aus und merkt sich jeden neu erreichten Ort ("Go-Explore"). Ist das Ziel
-// gefunden, wird der Weg einmal sauber von vorne gespielt, damit das Level normal geschafft wird.
+// Er speichert Spielzustaende, probiert von dort aus Lauf-/Sprung-Folgen aus und merkt sich jeden neu erreichten
+// Ort ("Go-Explore"). Ist das Ziel gefunden, wird der Weg einmal sauber von vorne gespielt.
+// v1.4:
+//  - Fortschritt = Level-Checkpoints + eingesammelte Items (Schluessel) + Naehe zum End-Trigger, nicht nur x
+//  - Orte, an denen man am Boden steht, werden bevorzugt (von dort kann man springen)
+//  - schneller: 4 Physik-Ticks pro Schritt, das Level wird beim Suchen nicht gezeichnet
+//  - sucht laenger, solange er noch weiterkommt
+//  - klappt das Nachspielen nicht, sucht er ab der Stelle weiter statt aufzugeben
 // =====================================================================
-constexpr float STEP_DT = 1.f / 240.f;
+constexpr float STEP_DT = 1.f / 60.f;   // ein Bot-Schritt = 4 Physik-Ticks (GD rechnet intern mit 240 Hz)
+constexpr int SPS = 60;                  // Bot-Schritte pro Sekunde
+constexpr float CELL = 30.f;             // Rastergroesse fuer "Orte" (1 Block)
 constexpr int B_JUMP = 1, B_LEFT = 2, B_RIGHT = 3;
 
 struct Ev {
@@ -174,23 +181,47 @@ struct Ev {
 };
 
 struct Node {
-    Ref<CheckpointObject> cp;
+    Ref<CheckpointObject> cp;       // gespeicherter Spielzustand (fehlt, wenn der Ort aussortiert wurde)
     std::shared_ptr<Node> parent;   // Zustand, von dem aus die Episode gestartet ist
-    std::vector<Ev> seg;            // Eingaben ab dem Laden von parent (Ticks relativ dazu)
+    std::vector<Ev> seg;            // Eingaben ab dem Laden von parent (Schritte relativ dazu)
     int segTicks = 0;
     int total = 0;
     float x = 0.f, y = 0.f;
+    bool grounded = false;
     int chosen = 0;
     int found = 0;
+    int born = 0;                   // Episode, in der der Ort entdeckt wurde
     bool inSection = false;
+    std::vector<int> cps;           // aktivierte Level-Checkpoints (uniqueIDs, sortiert)
+    std::vector<int> picks;         // eingesammelte Items (uniqueIDs, sortiert)
+    double prog = 0.0;              // Fortschritt (Checkpoints + Items + Naehe zum Ziel)
 };
 using NodeP = std::shared_ptr<Node>;
 
 struct Segment {
     NodeP from;
+    NodeP to;                       // Ort am Ende des Abschnitts (beim letzten Abschnitt leer = Ziel)
     std::vector<Ev> evs;
     int ticks = 0;
 };
+
+uint64_t mixHash(uint64_t h, uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+}
+
+uint64_t idsHash(std::vector<int> const& v) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int x : v) h = mixHash(h, static_cast<uint32_t>(x));
+    return h;
+}
+
+bool addId(std::vector<int>& v, int id) {
+    auto it = std::lower_bound(v.begin(), v.end(), id);
+    if (it != v.end() && *it == id) return false;
+    v.insert(it, id);
+    return true;
+}
 
 class PBot {
 public:
@@ -216,13 +247,19 @@ public:
 
     NodeP root;
     NodeP best;
-    std::unordered_map<int64_t, NodeP> cells;
+    std::unordered_map<uint64_t, NodeP> cells;
     std::mt19937 rng{1234567u};
     double tStart = 0;
     double tInfo = 0;
+    double tImprove = 0;
     long long steps = 0;
     int episodes = 0;
+    int repairs = 0;
     float minX = 0, maxX = 0;
+    float levelX1 = 0;              // rechter Levelrand (aus den Objekten)
+    std::vector<CCPoint> goals;     // End-Trigger, die man beruehren muss
+    double goalD0 = 1.0;
+    int totalCps = 0;               // Checkpoints im Level
 
     struct Episode {
         NodeP start;
@@ -231,12 +268,15 @@ public:
         int maxTicks = 0;
         std::vector<Ev> evs;
         int h = 0;
+        int dir = 1;                // bevorzugte Laufrichtung (Richtung Ziel)
         int actLeft = 0;
         int jumpPress = -1;
         int jumpRelease = -1;
         bool held[4] = {false, false, false, false};
         float lastX = 0, lastY = 0;
         int still = 0;
+        std::vector<int> cps;
+        std::vector<int> picks;
     } ep;
 
     // Sauberer Lauf am Ende
@@ -254,6 +294,7 @@ public:
     float savedMusic = -1.f, savedSfx = -1.f;
     Ref<CCNode> overlay;
     CCLabelBMFont* infoLabel = nullptr;
+    bool worldHidden = false;
 
     static int maxCells() { return static_cast<int>(Mod::get()->getSettingValue<int64_t>("plat-max-cells")); }
     static double maxSearchSec() { return 60.0 * Mod::get()->getSettingValue<int64_t>("plat-search-minutes"); }
@@ -283,20 +324,25 @@ public:
         flat.clear();
         steps = 0;
         episodes = 0;
+        repairs = 0;
         ep = Episode{};
         dead = reached = false;
-        root = makeNode(nullptr, {}, 0);
+        root = makeNode(nullptr, {}, 0, {}, {});
         if (!root) {
             fail("Spielzustand liess sich nicht speichern");
             return;
         }
-        cells[cellKey()] = root;
+        scanLevel();
+        root->prog = progressOf(root->x, root->y, root->cps, root->picks);
+        cells[cellKey(root->cps, root->picks)] = root;
         best = root;
         minX = maxX = root->x;
         mode = Mode::Search;
         tStart = nowSec();
         tInfo = 0;
+        tImprove = tStart;
         buildOverlay();
+        setWorldHidden(true);
         log::info("Platformer-Bot sucht ...");
     }
 
@@ -309,6 +355,12 @@ public:
         }
     }
 
+    // Beim Suchen muss niemand das Level sehen (das Fenster liegt drueber): spart Rechenzeit
+    void setWorldHidden(bool hide) {
+        if (pl && pl->m_objectLayer) pl->m_objectLayer->setVisible(!hide);
+        worldHidden = hide;
+    }
+
     void clearSearch() {
         cells.clear();
         plan.clear();
@@ -316,6 +368,13 @@ public:
         ep = Episode{};
         best = nullptr;
         root = nullptr;
+        goals.clear();
+    }
+
+    std::string progressText() const {
+        if (!best) return "";
+        if (totalCps > 0) return fmt::format("{}/{} Checkpoints", best->cps.size(), totalCps);
+        return fmt::format("{:.0f} Bloecke weit", root ? (maxX - root->x) / 30.f : 0.f);
     }
 
     // Abbruch mit Grund (der Demon-Bot ueberspringt dann das Level)
@@ -323,6 +382,7 @@ public:
         log::info("Platformer-Bot: {}", why);
         failReason = why;
         if (pl && mode != Mode::Off) releaseAll();
+        if (pl) setWorldHidden(false);
         mode = Mode::Off;
         removeOverlay();
         restoreSound();
@@ -332,6 +392,7 @@ public:
     // Ziel erreicht: ab hier laeuft das Spiel wieder normal (Abschluss-Animation usw.)
     void handover() {
         mode = Mode::Off;
+        if (pl) setWorldHidden(false);
         removeOverlay();
         restoreSound();
         clearSearch();
@@ -339,6 +400,8 @@ public:
 
     void shutdown(bool playLayerAlive) {
         if (playLayerAlive && pl && mode != Mode::Off) releaseAll();
+        if (playLayerAlive && pl && worldHidden) setWorldHidden(false);
+        worldHidden = false;
         mode = Mode::Off;
         removeOverlay();
         restoreSound();
@@ -351,8 +414,45 @@ public:
         }
     }
 
+    // ---------- Level ansehen: Ziel(e) und Checkpoints ----------
+    void scanLevel() {
+        goals.clear();
+        totalCps = 0;
+        levelX1 = root ? root->x : 0.f;
+        if (pl->m_objects) {
+            for (auto obj : CCArrayExt<GameObject*>(pl->m_objects)) {
+                if (!obj) continue;
+                levelX1 = std::max(levelX1, obj->getPositionX());
+                if (auto end = typeinfo_cast<EndTriggerGameObject*>(obj)) {
+                    if (end->m_isTouchTriggered) goals.push_back(end->getPosition());
+                } else if (typeinfo_cast<CheckpointGameObject*>(obj)) {
+                    totalCps++;
+                }
+            }
+        }
+        goalD0 = 60.0;
+        if (root) {
+            for (auto& g : goals) goalD0 = std::max(goalD0, static_cast<double>(std::hypot(g.x - root->x, g.y - root->y)));
+        }
+        log::info("Platformer-Bot: {} Ziel(e), {} Checkpoints, Levelende bei x={:.0f}", goals.size(), totalCps, levelX1);
+    }
+
+    double progressOf(float x, float y, std::vector<int> const& cps, std::vector<int> const& picks) const {
+        double local = 0.0;
+        if (!goals.empty()) {
+            double d = 1e18;
+            for (auto& g : goals) d = std::min(d, static_cast<double>(std::hypot(g.x - x, g.y - y)));
+            local = std::clamp(1.0 - d / goalD0, 0.0, 0.999);
+        } else {
+            float x0 = root ? root->x : 0.f;
+            local = std::clamp(static_cast<double>(x - x0) / std::max(300.0, static_cast<double>(levelX1 - x0)), 0.0, 0.999);
+        }
+        // jeder Checkpoint zaehlt mehr als jeder Weg-Fortschritt, Items (Schluessel) etwas weniger
+        return static_cast<double>(cps.size()) + 0.35 * static_cast<double>(std::min<size_t>(picks.size(), 20)) + local;
+    }
+
     // ---------- Spielzustaende ----------
-    NodeP makeNode(NodeP parent, std::vector<Ev> const& evs, int segTicks) {
+    NodeP makeNode(NodeP parent, std::vector<Ev> const& evs, int segTicks, std::vector<int> const& cps, std::vector<int> const& picks) {
         auto cp = pl->createCheckpoint();
         if (!cp) return nullptr;
         auto pos = pl->m_player1->getPosition();
@@ -377,11 +477,15 @@ public:
         n->total = (parent ? parent->total : 0) + segTicks;
         n->x = pos.x;
         n->y = pos.y;
+        n->grounded = pl->m_player1->m_isOnGround;
+        n->born = episodes;
+        n->cps = cps;
+        n->picks = picks;
         return n;
     }
 
     void ensureInSection(NodeP const& n) {
-        if (n->inSection) return;
+        if (n->inSection || !n->cp) return;
         auto obj = n->cp->m_physicalCheckpointObject;
         if (!obj) return;
         pl->addToSection(obj);
@@ -417,46 +521,80 @@ public:
         steps++;
     }
 
-    int64_t cellKey() const {
+    uint64_t cellKey(std::vector<int> const& cps, std::vector<int> const& picks) const {
         auto p = pl->m_player1;
-        int cx = static_cast<int>(std::floor(p->getPositionX() / 24.f));
-        int cy = static_cast<int>(std::floor(p->getPositionY() / 24.f));
+        int64_t cx = static_cast<int64_t>(std::floor(p->getPositionX() / CELL));
+        int64_t cy = static_cast<int64_t>(std::floor(p->getPositionY() / CELL));
         int m = p->m_isShip ? 1 : p->m_isBall ? 2 : p->m_isBird ? 3 : p->m_isDart ? 4
               : p->m_isRobot ? 5 : p->m_isSpider ? 6 : p->m_isSwing ? 7 : 0;
         int up = p->m_isUpsideDown ? 1 : 0;
-        return ((static_cast<int64_t>(cx) + 1000000) * 4000000 + (static_cast<int64_t>(cy) + 1000000)) * 16 + m * 2 + up;
+        uint64_t h = mixHash(static_cast<uint64_t>(cx + (1LL << 31)), static_cast<uint64_t>(cy + (1LL << 31)));
+        h = mixHash(h, static_cast<uint64_t>(m * 2 + up));
+        h = mixHash(h, idsHash(cps));
+        h = mixHash(h, idsHash(picks));
+        return h;
+    }
+
+    // ---------- Level-Ereignisse waehrend der Suche ----------
+    void onCheckpoint(GameObject* obj) {
+        if (mode != Mode::Search || !ep.running || !obj) return;
+        addId(ep.cps, obj->m_uniqueID);
+    }
+
+    void onPickup(GameObject* obj) {
+        if (mode != Mode::Search || !ep.running || !obj) return;
+        addId(ep.picks, obj->m_uniqueID);
     }
 
     // ---------- Suche ----------
     double rnd() { return std::uniform_real_distribution<double>(0.0, 1.0)(rng); }
     int rndInt(int a, int b) { return std::uniform_int_distribution<int>(a, b)(rng); }
 
+    // Welcher Ort wird als Naechstes erkundet? Selten besuchte und weit fortgeschrittene bevorzugt
     NodeP pickNode() {
         std::vector<NodeP> nodes;
-        std::vector<double> w;
         nodes.reserve(cells.size());
-        w.reserve(cells.size());
-        float range = std::max(1.f, maxX - minX);
         for (auto& [k, n] : cells) {
-            double prog = (n->x - minX) / range;
-            nodes.push_back(n);
-            w.push_back(1.0 / std::sqrt(1.0 + n->chosen) * (1.0 + 0.8 * prog) + 0.3 * n->found / (1.0 + n->chosen));
+            if (n->cp) nodes.push_back(n);
         }
         if (nodes.empty()) return root;
+        std::vector<size_t> order(nodes.size());
+        for (size_t i = 0; i < order.size(); i++) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return nodes[a]->prog < nodes[b]->prog; });
+        std::vector<double> w(nodes.size(), 0.0);
+        double denom = static_cast<double>(std::max<size_t>(1, order.size() - 1));
+        for (size_t r = 0; r < order.size(); r++) {
+            auto& n = nodes[order[r]];
+            double rank = order.size() > 1 ? static_cast<double>(r) / denom : 1.0;
+            double nov = 1.0 / std::sqrt(1.0 + n->chosen);
+            double recent = (episodes - n->born) < 40 ? 0.6 : 0.0;
+            double ground = n->grounded ? 1.0 : 0.6;
+            w[order[r]] = nov * ground * (0.3 + 2.7 * rank * rank + recent) + 0.25 * n->found / (1.0 + n->chosen);
+        }
         std::discrete_distribution<size_t> d(w.begin(), w.end());
         return nodes[d(rng)];
     }
 
+    // Archiv voll: wenig fortgeschrittene, oft probierte Orte fliegen raus (Speicher wird frei)
     bool evictOne() {
-        int64_t worstKey = 0;
-        double worst = -1e18;
+        uint64_t worstKey = 0;
+        double worst = 0;
+        bool any = false;
+        double bp = best ? std::max(1e-6, best->prog) : 1.0;
         for (auto& [k, n] : cells) {
-            if (n == root || n == ep.start || n == best || n->chosen < 3) continue;
-            double score = n->chosen - 3.0 * n->found;
-            if (score > worst) { worst = score; worstKey = k; }
+            if (n == root || n == ep.start || n == best || n->chosen < 2) continue;
+            double score = n->chosen - 2.0 * n->found - 8.0 * (n->prog / bp) - ((episodes - n->born) < 40 ? 5.0 : 0.0);
+            if (!any || score > worst) {
+                worst = score;
+                worstKey = k;
+                any = true;
+            }
         }
-        if (worst <= -1e17) return false;
-        cells.erase(worstKey);
+        if (!any) return false;
+        auto it = cells.find(worstKey);
+        if (it == cells.end()) return false;
+        it->second->cp = nullptr;
+        cells.erase(it);
         return true;
     }
 
@@ -472,60 +610,85 @@ public:
     void chooseAction() {
         if (!(ep.tick > 0 && rnd() < 0.6)) {
             double r = rnd();
-            ep.h = r < 0.5 ? 1 : (r < 0.78 ? -1 : 0);
+            ep.h = r < 0.55 ? ep.dir : (r < 0.78 ? -ep.dir : 0);
         }
         double j = rnd();
         if (j < 0.35) {
             ep.jumpPress = -1;
         } else if (j < 0.6) {
             ep.jumpPress = ep.tick;
-            ep.jumpRelease = ep.tick + rndInt(2, 8);
+            ep.jumpRelease = ep.tick + rndInt(1, 2);
         } else {
             ep.jumpPress = ep.tick;
-            ep.jumpRelease = ep.tick + rndInt(12, 60);
+            ep.jumpRelease = ep.tick + rndInt(3, 15);
         }
-        ep.actLeft = rndInt(8, 48);
+        ep.actLeft = rndInt(2, 14);
     }
 
     void startEpisode() {
         NodeP n = pickNode();
+        if (!n || !n->cp) n = root;
         n->chosen++;
         restore(n);
         ep = Episode{};
         ep.start = n;
         ep.running = true;
-        ep.maxTicks = rndInt(240 * 2, 240 * 6);
+        ep.maxTicks = rndInt(SPS * 2, SPS * 6);
         ep.lastX = pl->m_player1->getPositionX();
         ep.lastY = pl->m_player1->getPositionY();
+        ep.cps = n->cps;
+        ep.picks = n->picks;
+        ep.dir = 1;
+        if (!goals.empty()) {
+            float bestD = 1e18f;
+            float gx = n->x;
+            for (auto& g : goals) {
+                float d = std::hypot(g.x - n->x, g.y - n->y);
+                if (d < bestD) { bestD = d; gx = g.x; }
+            }
+            if (gx < n->x - 45.f) ep.dir = -1;
+        }
+        if (rnd() < 0.2) ep.dir = -ep.dir;   // ab und zu bewusst in die andere Richtung
         episodes++;
     }
 
-    void noteBounds(NodeP const& n) {
+    void noteNode(NodeP const& n) {
+        n->prog = progressOf(n->x, n->y, n->cps, n->picks);
         minX = std::min(minX, n->x);
         maxX = std::max(maxX, n->x);
-        if (!best || n->x > best->x) best = n;
+        if (!best || n->prog > best->prog + 1e-9) {
+            best = n;
+            tImprove = nowSec();
+        }
     }
 
     void considerCell() {
-        int64_t key = cellKey();
+        uint64_t key = cellKey(ep.cps, ep.picks);
         int total = ep.start->total + ep.tick;
+        bool grounded = pl->m_player1->m_isOnGround;
         auto it = cells.find(key);
         if (it == cells.end()) {
             if (static_cast<int>(cells.size()) >= maxCells() && !evictOne()) return;
-            auto n = makeNode(ep.start, ep.evs, ep.tick);
+            auto n = makeNode(ep.start, ep.evs, ep.tick, ep.cps, ep.picks);
             if (!n) return;
             cells[key] = n;
             ep.start->found++;
-            noteBounds(n);
-        } else if (total + 48 < it->second->total) {
-            auto n = makeNode(ep.start, ep.evs, ep.tick);
-            if (!n) return;
-            n->chosen = it->second->chosen;
-            n->found = it->second->found;
-            if (it->second == best) best = n;
-            it->second = n;
-            noteBounds(n);
+            noteNode(n);
+            return;
         }
+        NodeP old = it->second;
+        if (old == ep.start) return;
+        // gleicher Ort: am Boden stehen schlaegt Fallen, sonst zaehlt der kuerzere Weg
+        bool better = (grounded && !old->grounded) || (grounded == old->grounded && total + 12 < old->total);
+        if (!better) return;
+        auto n = makeNode(ep.start, ep.evs, ep.tick, ep.cps, ep.picks);
+        if (!n) return;
+        n->chosen = old->chosen;
+        n->found = old->found;
+        if (old == best) best = n;
+        if (old != root) old->cp = nullptr;   // ersetzt: Speicher frei (bleibt nur als Weg-Glied)
+        it->second = n;
+        noteNode(n);
     }
 
     void searchTick() {
@@ -539,9 +702,9 @@ public:
         if (ep.tick == ep.jumpRelease) setHeld(B_JUMP, false);
         if (ep.tick == ep.jumpPress) {
             if (ep.held[B_JUMP]) {
-                setHeld(B_JUMP, false);   // erst loslassen, im naechsten Tick neu druecken
+                setHeld(B_JUMP, false);   // erst loslassen, im naechsten Schritt neu druecken
                 ep.jumpPress = ep.tick + 1;
-                if (ep.jumpRelease <= ep.jumpPress) ep.jumpRelease = ep.jumpPress + 3;
+                if (ep.jumpRelease <= ep.jumpPress) ep.jumpRelease = ep.jumpPress + 2;
             } else {
                 setHeld(B_JUMP, true);
             }
@@ -549,12 +712,13 @@ public:
         step();
         ep.tick++;
         ep.actLeft--;
-        if (reached) {
-            onGoalFound();
-            return;
-        }
+        // Tod zuerst pruefen: im selben Schritt kann das Spiel nach dem (unterdrueckten) Tod noch weiterlaufen
         if (dead) {
             ep.running = false;
+            return;
+        }
+        if (reached) {
+            onGoalFound();
             return;
         }
         float x = pl->m_player1->getPositionX();
@@ -567,7 +731,7 @@ public:
             ep.lastY = y;
         }
         considerCell();
-        if (ep.tick >= ep.maxTicks || ep.still > 360) ep.running = false;
+        if (ep.tick >= ep.maxTicks || ep.still > SPS * 3 / 2) ep.running = false;
     }
 
     void onGoalFound() {
@@ -576,8 +740,8 @@ public:
         std::vector<NodeP> chain;
         for (NodeP n = ep.start; n; n = n->parent) chain.push_back(n);
         std::reverse(chain.begin(), chain.end());
-        for (size_t i = 1; i < chain.size(); i++) plan.push_back({chain[i - 1], chain[i]->seg, chain[i]->segTicks});
-        plan.push_back({ep.start, ep.evs, ep.tick});
+        for (size_t i = 1; i < chain.size(); i++) plan.push_back({chain[i - 1], chain[i], chain[i]->seg, chain[i]->segTicks});
+        plan.push_back({ep.start, nullptr, ep.evs, ep.tick});
         ep.running = false;
         startFinal();
     }
@@ -596,6 +760,7 @@ public:
         }
         flatTicks = off;
         removeOverlay();
+        setWorldHidden(false);
         mode = Mode::Final;
         segmentedFinal = false;
         fIdx = 0;
@@ -618,6 +783,43 @@ public:
         fTick = 0;
     }
 
+    // Nachspielen ging schief: diesen Abschnitt und alles dahinter vergessen und ab dort weitersuchen
+    void repair(size_t k) {
+        if (repairs >= 3 || !root) {
+            fail("Weg funktioniert beim Nachspielen nicht");
+            return;
+        }
+        repairs++;
+        NodeP bad = k < plan.size() ? plan[k].to : nullptr;
+        if (bad && bad != root) {
+            for (auto it = cells.begin(); it != cells.end();) {
+                bool under = false;
+                for (NodeP n = it->second; n; n = n->parent) {
+                    if (n == bad) { under = true; break; }
+                }
+                if (under && it->second != root) {
+                    it->second->cp = nullptr;
+                    it = cells.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        best = root;
+        for (auto& [kk, n] : cells) {
+            if (n->prog > best->prog) best = n;
+        }
+        plan.clear();
+        flat.clear();
+        ep = Episode{};
+        dead = reached = false;
+        mode = Mode::Search;
+        tImprove = nowSec();
+        buildOverlay();
+        setWorldHidden(true);
+        log::info("Nachspielen weicht ab (Abschnitt {}), suche weiter ({}. Reparatur)", k, repairs);
+    }
+
     // false = Lauf (vorerst) vorbei
     bool finalTick() {
         if (!segmentedFinal) {
@@ -630,16 +832,17 @@ public:
             step();
             fTick++;
             if (mode != Mode::Final) return false;   // Ziel erreicht -> Spiel uebernimmt
-            if (dead || fTick > flatTicks + 600) startSegmentedFinal();
+            if (dead || fTick > flatTicks + SPS * 4) startSegmentedFinal();
             return true;
         }
         if (segIdx >= plan.size()) {
-            fail("Weg funktioniert beim Nachspielen nicht");
+            repair(plan.empty() ? 0 : plan.size() - 1);
             return false;
         }
         auto& s = plan[segIdx];
         if (fTick == 0) {
-            restore(s.from);
+            if (s.from && s.from->cp) restore(s.from);
+            else releaseAll();               // Zustand fehlt: einfach am Stueck weiterspielen
             evIdx = 0;
         }
         while (evIdx < s.evs.size() && s.evs[evIdx].tick <= fTick) {
@@ -652,7 +855,7 @@ public:
         fTick++;
         if (mode != Mode::Final) return false;
         if (dead) {
-            fail("Weg funktioniert beim Nachspielen nicht");
+            repair(segIdx);
             return false;
         }
         if (fTick >= s.ticks) {
@@ -671,18 +874,19 @@ public:
             while (mode == Mode::Search && nowSec() - t0 < limit) searchTick();
             if (mode != Mode::Search) return;
             double el = t0 - tStart;
-            if (el > maxSearchSec()) {
-                fail("kein Weg gefunden (Zeitlimit)");
+            bool stale = t0 - tImprove > 60.0;   // seit einer Minute kein neuer Fortschritt
+            if ((el > maxSearchSec() && stale) || el > 2.0 * maxSearchSec()) {
+                fail(fmt::format("kein Weg gefunden (Zeitlimit; {}, {} Orte)", progressText(), cells.size()));
             } else if (t0 - tInfo > 0.25 && infoLabel && root) {
                 tInfo = t0;
                 infoLabel->setString(fmt::format(
-                    "Zeit: {}:{:02}   Versuche: {}\nOrte: {}   Weitester Punkt: {:.0f} Bloecke",
-                    static_cast<int>(el) / 60, static_cast<int>(el) % 60, episodes, cells.size(),
-                    (maxX - root->x) / 30.f).c_str());
+                    "Zeit: {}:{:02}   Versuche: {}   Orte: {}\nFortschritt: {}{}",
+                    static_cast<int>(el) / 60, static_cast<int>(el) % 60, episodes, cells.size(), progressText(),
+                    repairs ? fmt::format("   (Reparatur {})", repairs) : std::string()).c_str());
             }
         } else if (mode == Mode::Final) {
-            acc += dt * 240.0;
-            int n = std::min(static_cast<int>(acc), 3000);
+            acc += dt * static_cast<double>(SPS);
+            int n = std::min(static_cast<int>(acc), 600);
             acc -= n;
             for (int i = 0; i < n && mode == Mode::Final; i++) {
                 if (!finalTick()) break;
@@ -1353,7 +1557,7 @@ public:
         }
         if (pb.active()) return;   // sucht oder spielt gerade
         // Weg wurde gespielt, Spiel macht die Abschluss-Animation: kurz warten
-        double limit = PBot::maxSearchSec() + maxReal();
+        double limit = 3.0 * PBot::maxSearchSec() + maxReal() + 120.0;
         if (t - tLevelStart > limit) leaveLevel(pl, false, "Zeitlimit (Platformer)");
     }
 
@@ -1725,6 +1929,7 @@ class $modify(BotPlayLayer, PlayLayer) {
 
     void checkpointActivated(CheckpointGameObject* object) {
         auto& pb = PBot::get();
+        if (pb.pl == this) pb.onCheckpoint(object);   // Suche: Level-Checkpoint zaehlt als Fortschritt
         pb.inCheckpointActivated = true;
         PlayLayer::checkpointActivated(object);
         pb.inCheckpointActivated = false;
@@ -1791,6 +1996,13 @@ class $modify(BotGameLayer, GJBaseGameLayer) {
         auto& pb = PBot::get();
         if (pb.active() && !pb.botInput && pb.pl && static_cast<GJBaseGameLayer*>(pb.pl) == this) return;
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
+    }
+
+    // Suche: eingesammelte Items (z. B. Schluessel fuer Tueren) zaehlen als Fortschritt
+    void pickupItem(EffectGameObject* object) {
+        auto& pb = PBot::get();
+        if (pb.pl && static_cast<GJBaseGameLayer*>(pb.pl) == this) pb.onPickup(object);
+        GJBaseGameLayer::pickupItem(object);
     }
 };
 
