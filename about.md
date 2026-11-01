@@ -11,8 +11,10 @@ echten Spiel einen Weg zum Ziel (er probiert Laeufe und Spruenge aus und merkt s
 spielt diesen Weg danach einmal sauber von vorne. Als Fortschritt zaehlen Level-Checkpoints, eingesammelte Items
 und die Naehe zum End-Trigger. Findet er in der eingestellten Zeit keinen Weg, wird das Level uebersprungen.
 
-**Noclip und Speedhack muessen in Eclipse (oder einem anderen Mod) an sein.** Der Bot selbst gibt keine Eingaben,
-er bedient nur das Menue.
+**Turbo:** Der Bot laesst die Level so schnell laufen, wie der PC es schafft (Standard bis 100x). In Szenen mit vielen Objekten wird er automatisch langsamer, statt dass das Spiel einfriert. Unter Windows bekommt GD dabei volle CPU-Leistung.
+
+**Noclip muss in Eclipse (oder einem anderen Mod) an sein.** Den Speedhack braucht man mit Turbo nicht. In Classic-Leveln
+gibt der Bot selbst keine Eingaben, er bedient nur das Menue.
 
 - Startet nie auf dem geschuetzten Account (Einstellung, Standard: GTX980M)
 - Blockiert standardmaessig das Hochladen der Stats an die Bestenlisten

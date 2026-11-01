@@ -7,7 +7,7 @@
 	},
 	"id": "tony.demon-bot",
 	"name": "Demon Bot",
-	"version": "v1.4.0",
+	"version": "v1.5.0",
 	"developer": "Tony",
 	"description": "Spielt automatisch bewertete Level nacheinander: Classic mit Noclip, Platformer mit eigener Wegsuche.",
 	"dependencies": {
@@ -55,6 +55,34 @@
 			"default": 2.5,
 			"min": 1.0,
 			"max": 30.0
+		},
+		"turbo": {
+			"name": "Turbo (so schnell wie der PC kann)",
+			"description": "Der Bot rechnet pro Bild so viele Spielschritte, wie in die Rechenzeit passen: leere Szenen laufen sehr schnell, Szenen mit vielen Objekten automatisch langsamer, statt dass das Spiel einfriert. Der Speedhack in Eclipse wird dafuer nicht gebraucht (kann auf 1x). Ton ist im Turbo aus.",
+			"type": "bool",
+			"default": true
+		},
+		"turbo-max-speed": {
+			"name": "Turbo: max. Tempo (x-fach)",
+			"description": "Obergrenze fuer leere Szenen. Volle Szenen werden automatisch langsamer.",
+			"type": "int",
+			"default": 100,
+			"min": 2,
+			"max": 1000
+		},
+		"turbo-frame-ms": {
+			"name": "Turbo: Rechenzeit pro Bild (ms)",
+			"description": "Mehr = schneller, die Anzeige ruckelt dann staerker (30 ms = etwa 30 Bilder pro Sekunde).",
+			"type": "int",
+			"default": 30,
+			"min": 8,
+			"max": 100
+		},
+		"windows-boost": {
+			"name": "Windows: volle CPU-Leistung fuer GD",
+			"description": "Solange der Bot laeuft, darf Windows GD nicht drosseln (kein Effizienzmodus, hoehere Prioritaet), auch wenn das Fenster beim Aufnehmen im Hintergrund liegt. Nur Windows.",
+			"type": "bool",
+			"default": true
 		},
 		"plat-search-minutes": {
 			"name": "Platformer: Suchzeit pro Level (Minuten)",
