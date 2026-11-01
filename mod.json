@@ -1,0 +1,85 @@
+{
+	"geode": "5.10.1",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081"
+	},
+	"id": "tony.turbo-power",
+	"name": "Turbo Power",
+	"version": "v1.0.0",
+	"developer": "Tony",
+	"description": "Laesst Level so schnell laufen, wie der PC es schafft (bis 100x), ohne einzufrieren. Unter Windows mit voller CPU-Leistung.",
+	"settings": {
+		"title-turbo": {
+			"type": "title",
+			"name": "Turbo"
+		},
+		"enabled": {
+			"name": "Turbo an",
+			"description": "Pro Bild so viele Spielschritte, wie in die Rechenzeit passen. Volle Szenen laufen automatisch langsamer, statt dass das Spiel einfriert. Ein Speedhack wird dabei nicht gebraucht.",
+			"type": "bool",
+			"default": true
+		},
+		"only-demon-bot": {
+			"name": "Nur wenn der Demon Bot spielt",
+			"description": "Turbo nur in Leveln, die der Demon Bot spielt (ESC haelt ihn an, dann ist auch der Turbo aus). Aus = in jedem Level.",
+			"type": "bool",
+			"default": true
+		},
+		"max-speed": {
+			"name": "Hoechsttempo (x)",
+			"description": "Schneller laeuft es nie, auch wenn der PC mehr schaffen wuerde.",
+			"type": "int",
+			"default": 100,
+			"min": 2,
+			"max": 1000
+		},
+		"frame-ms": {
+			"name": "Rechenzeit pro Bild (ms)",
+			"description": "Mehr = in vollen Szenen schneller, aber weniger Bilder pro Sekunde. 30 ms ist ein guter Mittelweg.",
+			"type": "int",
+			"default": 30,
+			"min": 8,
+			"max": 200
+		},
+		"mute": {
+			"name": "Ton aus im Turbo",
+			"description": "Musik und Effekte sind still, solange der Turbo laeuft (die Lautstaerke-Einstellungen bleiben, wie sie sind).",
+			"type": "bool",
+			"default": true
+		},
+		"show-speed": {
+			"name": "Tempo anzeigen",
+			"description": "Zeigt unten rechts, wie schnell es gerade wirklich laeuft (z. B. 'Turbo 87x').",
+			"type": "bool",
+			"default": true
+		},
+		"toggle-key": {
+			"name": "Taste: Turbo an/aus",
+			"description": "Schaltet den Turbo um, ohne zu pausieren (Pause wuerde den Demon Bot anhalten).",
+			"type": "keybind",
+			"default": "F8",
+			"category": "gameplay"
+		},
+		"title-windows": {
+			"type": "title",
+			"name": "Windows",
+			"platforms": ["win"]
+		},
+		"windows-boost": {
+			"name": "Keine Drosselung",
+			"description": "Solange der Turbo laeuft: kein Energiesparen/'Effizienzmodus' fuer GD (auch im Hintergrund, z. B. beim Aufnehmen) und hoehere Prioritaet.",
+			"type": "bool",
+			"default": true,
+			"platforms": ["win"]
+		},
+		"power-plan": {
+			"name": "Energiesparplan Hoechstleistung",
+			"description": "Solange der Turbo laeuft, schaltet Windows auf 'Hoechstleistung' (oder Energiemodus 'Beste Leistung'), damit die CPU hochtaktet. 20 s danach und beim Beenden kommt dein alter Plan zurueck, nach einem Absturz beim naechsten Start.",
+			"type": "bool",
+			"default": true,
+			"platforms": ["win"]
+		}
+	}
+}
