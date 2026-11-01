@@ -158,73 +158,6 @@ int legacyMask() {
 }
 
 // =====================================================================
-// Turbo: statt einer festen Speedhack-Geschwindigkeit rechnet der Bot pro Bild so viele Spielschritte, wie in eine
-// feste Rechenzeit passen. Leere Szenen laufen dadurch sehr schnell, Szenen mit vielen Objekten automatisch
-// langsamer, statt dass das Spiel einfriert. Unter Windows wird GD ausserdem nicht mehr gedrosselt.
-// =====================================================================
-struct Turbo {
-    static inline bool inStep = false;
-    static inline double lastFrame = 0;
-    static inline float savedMusic = -1.f, savedSfx = -1.f;
-    static inline bool boosted = false;
-
-    static bool enabled() { return Mod::get()->getSettingValue<bool>("turbo"); }
-    static double budget() { return Mod::get()->getSettingValue<int64_t>("turbo-frame-ms") / 1000.0; }
-    static double maxSpeed() { return static_cast<double>(Mod::get()->getSettingValue<int64_t>("turbo-max-speed")); }
-
-    // Echtzeit seit dem letzten Turbo-Bild (Speedhack von Eclipse wird dabei ignoriert)
-    static double realDt() {
-        double now = nowSec();
-        double d = lastFrame > 0 ? std::clamp(now - lastFrame, 0.0, 0.1) : 1.0 / 60.0;
-        lastFrame = now;
-        return d;
-    }
-
-    static void mute() {
-        if (savedMusic >= 0.f) return;
-        auto fm = FMODAudioEngine::sharedEngine();
-        savedMusic = fm->m_musicVolume;
-        savedSfx = fm->m_sfxVolume;
-        fm->setBackgroundMusicVolume(0.f);
-        fm->setEffectsVolume(0.f);
-    }
-
-    static void unmute() {
-        lastFrame = 0;
-        if (savedMusic < 0.f) return;
-        auto fm = FMODAudioEngine::sharedEngine();
-        fm->setBackgroundMusicVolume(savedMusic);
-        fm->setEffectsVolume(savedSfx);
-        savedMusic = savedSfx = -1.f;
-    }
-
-    // Windows: GD bekommt volle Leistung (kein Energiesparen/"Effizienzmodus", hoehere Prioritaet),
-    // auch wenn das Fenster beim Aufnehmen im Hintergrund liegt
-    static void boost(bool on) {
-#ifdef GEODE_IS_WINDOWS
-        if (on && !Mod::get()->getSettingValue<bool>("windows-boost")) return;
-        if (on == boosted) return;
-        PROCESS_POWER_THROTTLING_STATE ps{};
-        ps.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-        ps.ControlMask = on ? PROCESS_POWER_THROTTLING_EXECUTION_SPEED : 0;   // 0 = Windows entscheidet wieder selbst
-        ps.StateMask = 0;                                                      // gesetzt + 0 = nie drosseln
-        SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &ps, sizeof(ps));
-        THREAD_POWER_THROTTLING_STATE ts{};
-        ts.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
-        ts.ControlMask = on ? THREAD_POWER_THROTTLING_EXECUTION_SPEED : 0;
-        ts.StateMask = 0;
-        SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &ts, sizeof(ts));
-        SetPriorityClass(GetCurrentProcess(), on ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
-        SetThreadPriority(GetCurrentThread(), on ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_NORMAL);
-        boosted = on;
-        log::info("Windows-Leistung: {}", on ? "voll (keine Drosselung)" : "normal");
-#else
-        (void)on;
-#endif
-    }
-};
-
-// =====================================================================
 // Platformer-Bot: findet mit dem echten Spiel selbst einen Weg zum Ziel.
 //
 // Er speichert Spielzustaende, probiert von dort aus Lauf-/Sprung-Folgen aus und merkt sich jeden neu erreichten
@@ -952,16 +885,6 @@ public:
                     repairs ? fmt::format("   (Reparatur {})", repairs) : std::string()).c_str());
             }
         } else if (mode == Mode::Final) {
-            if (Turbo::enabled()) {
-                // so schnell, wie es die Rechenzeit erlaubt (hoechstens Turbo-Maximaltempo)
-                int n = std::max(1, static_cast<int>(std::ceil(Turbo::maxSpeed() * Turbo::realDt() * SPS)));
-                double lim = Turbo::budget();
-                for (int i = 0; i < n && mode == Mode::Final; i++) {
-                    if (!finalTick()) break;
-                    if (nowSec() - t0 > lim) break;
-                }
-                return;
-            }
             acc += dt * static_cast<double>(SPS);
             int n = std::min(static_cast<int>(acc), 600);
             acc -= n;
@@ -1233,7 +1156,6 @@ public:
         Mod::get()->setSavedValue<bool>("running", true);
         saveProgress();
         (void)Mod::get()->saveData();
-        Turbo::boost(true);
         log::info("Bot gestartet ({}, {}), {} Seite {}", resume ? "weiter" : "neu", maskLabel(mask), filterLabel(), page + 1);
         Notification::create(fmt::format("Bot gestartet: {}", maskLabel(mask)), NotificationIcon::Success)->show();
     }
@@ -1251,8 +1173,6 @@ public:
         ph = Ph::Idle;
         releaseDelegates();
         if (PBot::get().active()) PBot::get().shutdown(true);
-        Turbo::unmute();
-        Turbo::boost(false);
         Mod::get()->setSavedValue<bool>("running", false);
         writeReport();
         saveAll();
@@ -1265,8 +1185,6 @@ public:
         running = false;
         ph = Ph::Idle;
         releaseDelegates();
-        Turbo::unmute();
-        Turbo::boost(false);
         Mod::get()->setSavedValue<bool>("running", false);
         Mod::get()->setSavedValue<bool>("has-progress", false);
         writeReport();
@@ -2040,7 +1958,6 @@ class $modify(BotPlayLayer, PlayLayer) {
 
     void onQuit() {
         if (PBot::get().pl == this) PBot::get().shutdown(false);
-        Turbo::unmute();
         PlayLayer::onQuit();
     }
 
@@ -2064,32 +1981,6 @@ class $modify(BotPlayLayer, PlayLayer) {
     }
 };
 
-// ---------- Turbo: so viele Spielschritte pro Bild, wie in die Rechenzeit passen ----------
-bool turboWanted(GJBaseGameLayer* gl) {
-    if (Turbo::inStep || !Turbo::enabled()) return false;
-    auto pl = PlayLayer::get();
-    if (!pl || static_cast<GJBaseGameLayer*>(pl) != gl) return false;
-    auto bot = DemonBot::get();
-    return bot->controls(pl) && !bot->completed && !pl->m_isPaused && !pl->m_isPlatformer;
-}
-
-void turboFrame(GJBaseGameLayer* gl) {
-    auto pl = static_cast<PlayLayer*>(gl);
-    auto bot = DemonBot::get();
-    double t0 = nowSec();
-    double lim = Turbo::budget();
-    // hoechstens Maximaltempo x Echtzeit, aber immer mindestens ein Schritt (1/30 s Spielzeit = 8 Physik-Ticks)
-    int n = std::max(1, static_cast<int>(std::ceil(Turbo::maxSpeed() * Turbo::realDt() * 30.0)));
-    Turbo::mute();
-    for (int i = 0; i < n; i++) {
-        Turbo::inStep = true;
-        gl->update(1.f / 30.f);
-        Turbo::inStep = false;
-        if (!bot->controls(pl) || bot->completed || pl->m_isPaused) break;
-        if (nowSec() - t0 > lim) break;   // volle Szene: lieber langsamer als einfrieren
-    }
-}
-
 // ---------- Platformer-Bot steuert die Zeit und die Eingaben selbst ----------
 class $modify(BotGameLayer, GJBaseGameLayer) {
     void update(float dt) {
@@ -2098,11 +1989,6 @@ class $modify(BotGameLayer, GJBaseGameLayer) {
             pb.frame(dt);
             return;
         }
-        if (turboWanted(this)) {
-            turboFrame(this);
-            return;
-        }
-        if (!Turbo::inStep && Turbo::savedMusic >= 0.f) Turbo::unmute();   // Level fertig: Ton wieder an
         GJBaseGameLayer::update(dt);
     }
 

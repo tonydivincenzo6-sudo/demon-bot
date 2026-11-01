@@ -1,11 +1,3 @@
-# v1.5.0
-- Neu: Turbo. Der Bot rechnet pro Bild so viele Spielschritte, wie in die Rechenzeit passen. Leere Szenen laufen
-  sehr schnell (bis zum eingestellten Maximaltempo, Standard 100x), Szenen mit vielen Objekten automatisch langsamer,
-  statt dass das Spiel einfriert. Der Speedhack in Eclipse wird dafuer nicht gebraucht.
-- Neu (Windows): GD wird nicht mehr gedrosselt, solange der Bot laeuft (kein Effizienzmodus, hoehere Prioritaet),
-  auch wenn das Fenster im Hintergrund liegt
-- Platformer: der saubere Lauf am Ende nutzt ebenfalls den Turbo
-
 # v1.4.0
 - Platformer-Bot deutlich staerker:
   - zaehlt Level-Checkpoints und eingesammelte Items (Schluessel) als Fortschritt, nicht nur wie weit rechts er ist
