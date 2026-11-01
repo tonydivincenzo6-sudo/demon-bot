@@ -32,9 +32,11 @@ constexpr char const* BOT_OVERLAY = "tony.demon-bot/overlay";            // Bot 
 constexpr char const* BOT_SEARCH = "tony.demon-bot/platformer-search";   // Platformer-Bot sucht gerade (rechnet selbst)
 
 constexpr double HOLD_SEC = 20.0;          // so lange bleibt volle Leistung nach dem letzten Turbo-Bild an
-constexpr double MIN_CHUNK = 1.0 / 120.0;  // kleinstes Stueck Spielzeit pro Update (2 Physik-Ticks)
+// Jedes Update kostet GD eine feste Grundzeit (Sichtbarkeit, Kamera, Effekte) plus Zeit pro Physik-Tick. Grosse Stuecke
+// sparen Grundzeit, kleine treffen die Rechenzeit genauer. Simuliert: 2 Stuecke pro Bild, 1/30 s bis 0,5 s Spielzeit.
+constexpr double MIN_CHUNK = 1.0 / 30.0;   // kleinstes Stueck Spielzeit pro Update (8 Physik-Ticks)
 constexpr double MAX_CHUNK = 0.5;          // groesstes Stueck (120 Physik-Ticks)
-constexpr double PIECES = 4.0;             // die Rechenzeit eines Bildes wird in etwa so viele Stuecke geteilt
+constexpr double PIECES = 2.0;             // die Rechenzeit eines Bildes wird in etwa so viele Stuecke geteilt
 
 double nowSec() {
     using namespace std::chrono;
@@ -297,14 +299,6 @@ struct Turbo {
                !pl->m_levelEndAnimationStarted && !pl->getChildByID(BOT_SEARCH);
     }
 
-    // Echtzeit seit dem letzten Turbo-Bild (ein Speedhack wird dabei ignoriert)
-    static double realDt() {
-        double now = nowSec();
-        double d = lastFrame > 0 ? std::clamp(now - lastFrame, 0.0, 0.1) : 1.0 / 60.0;
-        lastFrame = now;
-        return d;
-    }
-
     static void mute(bool on) {
         if (on == muted) return;
         auto fm = FMODAudioEngine::sharedEngine();
@@ -318,9 +312,12 @@ struct Turbo {
     static void frame(GJBaseGameLayer* gl) {
         auto pl = static_cast<PlayLayer*>(gl);
         double t0 = nowSec();
-        double real = realDt();
-        double budget = static_cast<double>(number("frame-ms")) / 1000.0;
+        // Echtzeit seit dem letzten Turbo-Bild (ein Speedhack wird dabei ignoriert)
+        double real = lastFrame > 0 ? std::clamp(t0 - lastFrame, 0.0, 0.1) : 1.0 / 60.0;
         double target = static_cast<double>(number("max-speed")) * real;   // gewuenschte Spielzeit fuer dieses Bild
+        if (target < 1.0 / 240.0) return;   // sehr hohe Bildrate: die Zeit im naechsten Bild mitnehmen
+        lastFrame = t0;
+        double budget = static_cast<double>(number("frame-ms")) / 1000.0;
         double done = 0;
         if (flag("mute")) mute(true);
         Power::use();
@@ -343,7 +340,7 @@ struct Turbo {
             // nie langsamer als normal, sonst nicht mehr Rechenzeit als eingestellt
             if (nowSec() - t0 > budget && done >= real) break;
         }
-        showSpeed(pl, done / real);
+        if (PlayLayer::get() == pl) showSpeed(pl, done / real);
     }
 
     static void showSpeed(PlayLayer* pl, double speed) {
