@@ -1,0 +1,103 @@
+{
+	"geode": "5.10.1",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081"
+	},
+	"id": "tony.skillfarm",
+	"name": "SkillFarm PRO",
+	"version": "v1.0.0",
+	"developer": "Tony",
+	"description": "Dein Trainings-Coach: misst, wo du stirbst, und trainiert die schwersten Stellen in Schleife, mit Serien und steigendem Tempo.",
+	"settings": {
+		"title-record": {
+			"type": "title",
+			"name": "Aufzeichnung"
+		},
+		"account": {
+			"name": "Nur fuer diesen Account",
+			"description": "Wenn hier ein Accountname steht, zeichnet SkillFarm nur auf, wenn du mit diesem Account angemeldet bist. So kommen Laeufe von anderen Accounts nicht in deine Statistik. Leer = immer.",
+			"type": "string",
+			"default": ""
+		},
+		"heatmap": {
+			"name": "Waermekarte am Fortschrittsbalken",
+			"description": "Zeigt unter dem Fortschrittsbalken, wo du in diesem Level am haeufigsten stirbst (gelb = manchmal, rot = sehr oft).",
+			"type": "bool",
+			"default": true
+		},
+		"cheat-warning": {
+			"name": "Warnung bei Noclip/Speedhack",
+			"description": "Versuche mit Noclip oder Speedhack zaehlen nie. Diese Einstellung zeigt zusaetzlich einen Hinweis, wenn so etwas erkannt wird.",
+			"type": "bool",
+			"default": true
+		},
+		"title-drill": {
+			"type": "title",
+			"name": "Drill (Abschnitt-Training)"
+		},
+		"section-length": {
+			"name": "Laenge der vorgeschlagenen Abschnitte (%)",
+			"description": "So lang ist der Kern einer vorgeschlagenen schweren Stelle.",
+			"type": "int",
+			"default": 8,
+			"min": 3,
+			"max": 30
+		},
+		"lead-in": {
+			"name": "Anlauf vor der schweren Stelle (%)",
+			"description": "So viel vor der schweren Stelle beginnt der Abschnitt, damit du in den richtigen Rhythmus kommst.",
+			"type": "int",
+			"default": 2,
+			"min": 0,
+			"max": 10
+		},
+		"start-speed": {
+			"name": "Starttempo",
+			"description": "Mit diesem Tempo beginnt ein neuer Abschnitt (1,0 = normal).",
+			"type": "float",
+			"default": 0.8,
+			"min": 0.5,
+			"max": 1.0
+		},
+		"target-speed": {
+			"name": "Zieltempo",
+			"description": "Bis zu diesem Tempo wird gesteigert. Ueber 1,0 ist brutal: danach fuehlt sich normales Tempo langsam an.",
+			"type": "float",
+			"default": 1.0,
+			"min": 0.7,
+			"max": 1.5
+		},
+		"speed-step": {
+			"name": "Tempo-Stufe",
+			"description": "Um so viel wird das Tempo nach einer geschafften Serie erhoeht (oder bei zu vielen Fehlern gesenkt).",
+			"type": "float",
+			"default": 0.05,
+			"min": 0.01,
+			"max": 0.2
+		},
+		"streak-goal": {
+			"name": "Serie fuer die naechste Stufe",
+			"description": "So oft hintereinander musst du den Abschnitt schaffen, damit das Tempo steigt. Ein Tod setzt die Serie auf 0.",
+			"type": "int",
+			"default": 3,
+			"min": 1,
+			"max": 20
+		},
+		"mastery-goal": {
+			"name": "Serie zum Meistern",
+			"description": "So oft hintereinander beim Zieltempo, dann gilt der Abschnitt als gemeistert.",
+			"type": "int",
+			"default": 5,
+			"min": 1,
+			"max": 30
+		},
+		"sounds": {
+			"name": "Toene",
+			"description": "Kurzer Ton bei jedem geschafften Durchgang und beim Meistern.",
+			"type": "bool",
+			"default": true
+		}
+	}
+}
