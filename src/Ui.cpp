@@ -418,14 +418,11 @@ void showLevelPopup() {
 }
 
 void addPauseButton(CCLayer* pause) {
-    auto spr = safeSprite("GJ_statsBtn_001.png");
-    if (!spr) return;
-    spr->setScale(.75f);
     auto win = CCDirector::get()->getWinSize();
     auto menu = CCMenu::create();
     menu->setID("pause-menu"_spr);
     menu->setPosition({0.f, 0.f});
-    auto btn = CCMenuItemExt::createSpriteExtra(spr, [](CCMenuItemSpriteExtra*) { showLevelPopup(); });
+    auto btn = CCMenuItemExt::createSpriteExtra(skillfarmIcon(32.f), [](CCMenuItemSpriteExtra*) { showLevelPopup(); });
     btn->setID("open-button"_spr);
     btn->setPosition({34.f, win.height / 2.f - 20.f});
     menu->addChild(btn);
@@ -433,10 +430,7 @@ void addPauseButton(CCLayer* pause) {
 }
 
 void addMenuButton(CCLayer* layer) {
-    auto spr = safeSprite("GJ_statsBtn_001.png");
-    if (!spr) return;
-    spr->setScale(.8f);
-    auto btn = CCMenuItemExt::createSpriteExtra(spr, [](CCMenuItemSpriteExtra*) { showDashboard(0); });
+    auto btn = CCMenuItemExt::createSpriteExtra(skillfarmIcon(38.f), [](CCMenuItemSpriteExtra*) { showDashboard(0); });
     btn->setID("stats-button"_spr);
     if (auto side = typeinfo_cast<CCMenu*>(layer->getChildByID("right-side-menu"))) {
         side->addChild(btn);

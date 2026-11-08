@@ -78,6 +78,9 @@ void chartFrame(CCNode* parent, CCRect area, std::string const& maxLabel);
 CCMenuItemSpriteExtra* button(CCMenu* menu, std::string const& label, CCPoint pos, CCSize size, ccColor4F accent, bool filled,
                               geode::Function<void(CCMenuItemSpriteExtra*)> callback);
 
+// eigenes Symbol (Neon-Kreis mit Waermebalken) fuer die Knoepfe im Hauptmenue und im Pausemenue
+CCNode* skillfarmIcon(float size);
+
 // Sprites aus GD (nullptr, wenn das Bild fehlt)
 CCSprite* safeSprite(char const* frame);
 CCSprite* difficultySprite(int tier, float scale);

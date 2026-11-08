@@ -217,6 +217,34 @@ CCMenuItemSpriteExtra* button(CCMenu* menu, std::string const& label, CCPoint po
     return btn;
 }
 
+// ---------------- Symbol ----------------
+CCNode* skillfarmIcon(float size) {
+    auto node = CCNode::create();
+    node->setContentSize({size, size});
+    node->setAnchorPoint({.5f, .5f});
+    auto dn = drawNode();
+    float c = size / 2.f;
+    float r = size / 2.f - 2.f;
+    dn->drawDot({c, c}, r + 2.f, withAlpha(CYAN, .25f));   // Glow
+    dn->drawDot({c, c}, r, CYAN);                           // Ring
+    dn->drawDot({c, c}, r - size * .07f, BG);
+    // drei Balken wie die Waermekarte: gelb, orange, rot
+    float bw = size * .12f;
+    float gap = size * .05f;
+    float base = c - size * .2f;
+    float heights[3] = {.22f, .34f, .46f};
+    ccColor4F cols[3] = {GOLD, ORANGE, RED};
+    float x = c - 1.5f * bw - gap;
+    for (int i = 0; i < 3; i++) {
+        float h = size * heights[i];
+        CCPoint pts[4] = {{x, base}, {x + bw, base}, {x + bw, base + h}, {x, base + h}};
+        dn->drawPolygon(pts, 4, cols[i], 0.f, cols[i]);
+        x += bw + gap;
+    }
+    node->addChild(dn);
+    return node;
+}
+
 // ---------------- Sprites ----------------
 CCSprite* safeSprite(char const* frame) {
     if (!CCSpriteFrameCache::sharedSpriteFrameCache()->spriteFrameByName(frame)) return nullptr;
