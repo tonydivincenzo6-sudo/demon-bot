@@ -36,6 +36,12 @@ ccColor4F scoreColor(double s) {
 }
 
 // ---------------- Formen ----------------
+CCDrawNode* drawNode() {
+    auto dn = CCDrawNode::create();
+    dn->setBlendFunc({GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA});
+    return dn;
+}
+
 void roundRect(CCDrawNode* dn, CCRect r, float radius, ccColor4F fill, float border, ccColor4F borderColor) {
     radius = std::max(0.f, std::min(radius, std::min(r.size.width, r.size.height) / 2.f));
     constexpr int SEG = 6;
@@ -59,7 +65,7 @@ void roundRect(CCDrawNode* dn, CCRect r, float radius, ccColor4F fill, float bor
 }
 
 CCDrawNode* panel(CCNode* parent, CCRect r, ccColor4F accent, int z) {
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     // Glow: zwei weiche Rahmen, dann der Hauptrahmen
     roundRect(dn, r, 9.f, rgba(0, 0, 0, 0), 3.2f, withAlpha(accent, .12f));
     roundRect(dn, r, 9.f, rgba(0, 0, 0, 0), 1.8f, withAlpha(accent, .28f));
@@ -69,7 +75,7 @@ CCDrawNode* panel(CCNode* parent, CCRect r, ccColor4F accent, int z) {
 }
 
 void ring(CCNode* parent, CCPoint c, float radius, float thick, double value01, ccColor4F color) {
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     constexpr int SEG = 48;
     float half = thick / 2.f;
     // Hintergrund-Ring
@@ -91,7 +97,7 @@ void ring(CCNode* parent, CCPoint c, float radius, float thick, double value01, 
 }
 
 void meter(CCNode* parent, CCRect r, double value01, ccColor4F color) {
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     roundRect(dn, r, r.size.height / 2, DIM, 0.f, DIM);
     double v = std::clamp(value01, 0.0, 1.0);
     if (v > 0.001) {
@@ -103,7 +109,7 @@ void meter(CCNode* parent, CCRect r, double value01, ccColor4F color) {
 }
 
 void shareBar(CCNode* parent, CCRect r, std::array<float, MODES> const& share) {
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     float x = r.getMinX();
     for (int m = 0; m < MODES; m++) {
         float w = r.size.width * std::clamp(share[m], 0.f, 1.f);
@@ -141,7 +147,7 @@ CCLabelBMFont* text(CCNode* parent, std::string const& t, CCPoint pos, float sca
 
 // ---------------- Diagramme ----------------
 void chartFrame(CCNode* parent, CCRect a, std::string const& maxLabel) {
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     for (int i = 0; i <= 3; i++) {
         float y = a.getMinY() + a.size.height * i / 3.f;
         dn->drawSegment({a.getMinX(), y}, {a.getMaxX(), y}, .25f, withAlpha(GRAY, i == 0 ? .7f : .25f));
@@ -153,7 +159,7 @@ void chartFrame(CCNode* parent, CCRect a, std::string const& maxLabel) {
 void lineChart(CCNode* parent, CCRect a, std::vector<double> const& v, ccColor4F color, double maxY) {
     if (v.empty()) return;
     if (!(maxY > 0)) maxY = 1;
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     auto pt = [&](std::size_t i, double y) {
         float x = v.size() == 1 ? a.getMidX() : a.getMinX() + a.size.width * static_cast<float>(i) / static_cast<float>(v.size() - 1);
         return CCPoint{x, a.getMinY() + a.size.height * static_cast<float>(std::clamp(y / maxY, 0.0, 1.0))};
@@ -177,7 +183,7 @@ void lineChart(CCNode* parent, CCRect a, std::vector<double> const& v, ccColor4F
 void barChart(CCNode* parent, CCRect a, std::vector<double> const& v, ccColor4F color, double maxY) {
     if (v.empty()) return;
     if (!(maxY > 0)) maxY = 1;
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     float slot = a.size.width / static_cast<float>(v.size());
     float bw = std::max(1.f, slot * .68f);
     for (std::size_t i = 0; i < v.size(); i++) {
@@ -196,7 +202,7 @@ CCMenuItemSpriteExtra* button(CCMenu* menu, std::string const& label, CCPoint po
     auto node = CCNode::create();
     node->setContentSize(size);
     node->setAnchorPoint({.5f, .5f});
-    auto dn = CCDrawNode::create();
+    auto dn = drawNode();
     roundRect(dn, {0, 0, size.width, size.height}, std::min(6.f, size.height / 2), filled ? withAlpha(accent, .85f) : PANEL, .8f,
               accent);
     node->addChild(dn);

@@ -427,6 +427,36 @@ static void testTiers() {
     CHECK(demonIndex(3) == 0 && demonIndex(4) == 1 && demonIndex(0) == 2 && demonIndex(5) == 3 && demonIndex(6) == 4 && demonIndex(-1) == -1);
     CHECK(tierWeight(-1) == 1.0 && tierWeight(10) > tierWeight(6) && tierWeight(6) > tierWeight(5));
     CHECK(std::string(tierName(7)) == "Medium Demon" && std::string(tierName(-1)) == "Unbewertet");
+
+    // offizielle Level: Stufe aus der Tabelle, nicht aus den Sternen (xStep hat 10 Sterne, ist aber Insane)
+    CHECK(mainLevelTier(1) == 1 && mainLevelTier(10) == 5 && mainLevelTier(17) == 4 && mainLevelTier(20) == 6);
+    CHECK(mainLevelTier(14) == 6 && mainLevelTier(18) == 6 && mainLevelTier(0) == -1 && mainLevelTier(23) == -1);
+    LevelStats xstep;
+    xstep.main = true;
+    xstep.levelID = 10;
+    xstep.stars = 10;
+    CHECK(levelTier(xstep) == 5);
+    LevelStats deadlocked;
+    deadlocked.main = true;
+    deadlocked.levelID = 20;
+    deadlocked.stars = 15;
+    deadlocked.demonDifficulty = 0;   // GD meldet ihn als "Demon" ohne Stufe
+    CHECK(levelTier(deadlocked) == 6);
+    LevelStats online;
+    online.levelID = 20;   // gleiche ID, aber Online-Level: normale Regeln
+    online.stars = 10;
+    online.demonDifficulty = 5;
+    CHECK(levelTier(online) == 9);
+    LevelInfo info;
+    info.main = true;
+    info.levelID = 3;
+    info.stars = 3;
+    CHECK(levelTier(info) == 2);
+
+    // aeltere Datei ohne "main": wird am Schluessel erkannt
+    auto oldMain = matjson::parse("{\"v\":2,\"levels\":{\"main-20\":{\"name\":\"Deadlocked\",\"id\":20,\"stars\":15}}}").unwrap();
+    auto dbm = Database::fromJson(oldMain);
+    CHECK(dbm.levels["main-20"].main && levelTier(dbm.levels["main-20"]) == 6);
 }
 
 static LevelStats makeLevel(char const* name, int stars, int demon, Mode m, double sec, int deaths) {
@@ -471,11 +501,18 @@ static void testSkills() {
     db.levels["d1"] = makeLevel("The Nightmare", 10, 3, Mode::Cube, 10, 0);
     db.levels["d1"].manualCompleted = true;
     db.levels["d1"].manualAt = 100;
-    db.levels["d2"] = makeLevel("Deadlocked", 10, 3, Mode::Cube, 10, 0);
+    db.levels["d2"] = makeLevel("Deadlocked", 15, -1, Mode::Cube, 10, 0);   // offizielles Level: GD meldet keine Stufe
+    db.levels["d2"].main = true;
+    db.levels["d2"].levelID = 20;
     db.levels["d2"].completedLegit = true;
     db.levels["d2"].completedAt = 200;
+    db.levels["x10"] = makeLevel("xStep", 10, -1, Mode::Cube, 10, 0);   // 10 Sterne, aber kein Demon
+    db.levels["x10"].main = true;
+    db.levels["x10"].levelID = 10;
+    db.levels["x10"].completedLegit = true;
+    db.levels["x10"].completedAt = 50;
     sp = computeSkills(db);
-    CHECK(sp.demons[0] == 2 && sp.selfCompleted == 2);
+    CHECK(sp.demons[0] == 2 && sp.demons[2] == 0 && sp.selfCompleted == 3);
     CHECK(sp.playerClass == "Early Demon Player");
     CHECK(sp.lastCompleted == "Deadlocked");
     db.levels["d3"] = makeLevel("X", 10, 4, Mode::Cube, 10, 0);

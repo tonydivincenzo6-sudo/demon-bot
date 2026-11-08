@@ -70,6 +70,7 @@ struct Live {
     float appliedPitch = 1.f;
 
     double lastSave = 0;
+    bool shapeDone = false;       // Level-Aufbau gelesen (oder schon bekannt)
     bool heatmapReady = false;    // Waermekarte angelegt (oder abgeschaltet)
     std::string hudText;
     std::string sessionText;

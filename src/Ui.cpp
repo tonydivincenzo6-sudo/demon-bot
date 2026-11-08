@@ -40,7 +40,7 @@ protected:
         if (!Popup::init(LW, LH)) return false;
         m_key = std::move(key);
         if (m_bgSprite) m_bgSprite->setVisible(false);
-        auto bg = CCDrawNode::create();
+        auto bg = drawNode();
         roundRect(bg, {0, 0, LW, LH}, 12.f, rgba(0, 0, 0, 0), 3.f, withAlpha(CYAN, .15f));
         roundRect(bg, {0, 0, LW, LH}, 12.f, BG, 1.f, CYAN);
         m_mainLayer->addChild(bg, -5);
@@ -91,7 +91,7 @@ protected:
             text(m_content, "Noch keine Daten fuer dieses Level.", {LW / 2, LH / 2}, .7f, WHITE3, {.5f, .5f});
             return;
         }
-        int tier = difficultyTier(ls->stars, ls->demonDifficulty);
+        int tier = levelTier(*ls);
         heading(m_content, ls->name.empty() ? std::string("SkillFarm PRO") : ls->name, {LW / 2, LH - 16.f}, CYAN, .5f, {.5f, .5f}, 330.f);
         text(m_content, tierName(tier), {LW / 2, LH - 32.f}, .45f, GRAY3, {.5f, .5f});
         if (auto face = difficultySprite(tier, .5f)) {
@@ -110,7 +110,7 @@ protected:
         } else if (maxD <= 0) {
             text(m_content, "Noch keine Tode aufgezeichnet", {hx + hw / 2, hy + hh / 2}, .55f, GRAY3, {.5f, .5f});
         } else {
-            auto dn = CCDrawNode::create();
+            auto dn = drawNode();
             for (int i = 0; i < BINS; i++) {
                 if (deaths[i] <= 0) continue;
                 double v = static_cast<double>(deaths[i]) / maxD;
@@ -123,7 +123,7 @@ protected:
             m_content->addChild(dn, 2);
         }
         if (m_from >= 0 && m_to > m_from && !ls->platformer) {
-            auto sel = CCDrawNode::create();
+            auto sel = drawNode();
             CCPoint pts[4] = {{hx + m_from * bw, hy}, {hx + m_to * bw, hy}, {hx + m_to * bw, hy + hh}, {hx + m_from * bw, hy + hh}};
             sel->drawPolygon(pts, 4, rgba(255, 255, 255, 40), .6f, rgba(255, 255, 255, 120));
             m_content->addChild(sel, 3);
@@ -334,7 +334,36 @@ void refreshHeatmap(PlayLayer* pl) {
     }
 }
 
-// ---------------- Anzeigen oben: Drill (Mitte), Session (rechts) ----------------
+// ---------------- Anzeigen oben: Drill (Mitte, unter dem Fortschrittsbalken), Session (links oben) ----------------
+namespace {
+// Label einmal anlegen, danach nur den Text tauschen (setString nur bei Aenderung: kein Ruckeln)
+void setHudLabel(PlayLayer* pl, char const* id, std::string const& text, std::string& lastText, char const* font, float scale,
+                 CCPoint anchor, CCPoint pos, ccColor3B color, float maxW) {
+    auto label = typeinfo_cast<CCLabelBMFont*>(pl->getChildByID(id));
+    if (text.empty()) {
+        if (label) label->setVisible(false);
+        lastText.clear();
+        return;
+    }
+    if (!label) {
+        label = CCLabelBMFont::create("", font);
+        label->setID(id);
+        label->setAnchorPoint(anchor);
+        label->setPosition(pos);
+        label->setColor(color);
+        label->setOpacity(225);
+        pl->addChild(label, 1001);
+        lastText.clear();
+    }
+    label->setVisible(true);
+    if (text != lastText) {
+        label->setString(text.c_str());
+        limitNodeWidth(label, maxW, scale, scale * .5f);
+        lastText = text;
+    }
+}
+}  // namespace
+
 void updateHud(PlayLayer* pl) {
     if (!pl) return;
     auto& L = live();
@@ -343,71 +372,31 @@ void updateHud(PlayLayer* pl) {
     std::string text;
     if (L.recording && L.drill && !L.platformer) {
         if (!pl->m_isPracticeMode) {
-            text = "DRILL: nur im Uebungsmodus";
+            text = "DRILL: NUR IM UEBUNGSMODUS";
         } else if (!L.drillCp) {
-            text = fmt::format("DRILL {}-{}%:  Anlauf bis {}%", L.secFrom, L.secTo, L.secFrom);
+            text = fmt::format("DRILL {}-{}%: ANLAUF BIS {}%", L.secFrom, L.secTo, L.secFrom);
         } else if (auto s = drillSection()) {
             auto cfg = drillConfig();
             double rate = recentRate(*s);
-            text = fmt::format("DRILL {}-{}%    Serie {}/{}    Tempo {}    Quote {}", L.secFrom, L.secTo, s->streak,
-                               drillGoal(*s, cfg), speedText(s->speed), percentText(rate < 0 ? -1 : rate * 100));
-            if (drillMastered(*s, cfg)) text += "    GEMEISTERT";
+            text = fmt::format("DRILL {}-{}%  SERIE {}/{}  {}  QUOTE {}", L.secFrom, L.secTo, s->streak, drillGoal(*s, cfg),
+                               speedText(s->speed), percentText(rate < 0 ? -1 : rate * 100));
+            if (drillMastered(*s, cfg)) text += "  GEMEISTERT";
         }
     }
-    auto hud = static_cast<CCLabelBMFont*>(pl->getChildByID("drill-hud"_spr));
-    if (text.empty()) {
-        if (hud) hud->setVisible(false);
-        L.hudText.clear();
-    } else {
-        if (!hud) {
-            hud = CCLabelBMFont::create("", "bigFont.fnt");
-            hud->setID("drill-hud"_spr);
-            hud->setScale(.4f);
-            hud->setAnchorPoint({.5f, 1.f});
-            hud->setPosition({win.width / 2, win.height - 26.f});
-            pl->addChild(hud, 1001);
-            L.hudText.clear();
-        }
-        hud->setVisible(true);
-        if (text != L.hudText) {
-            hud->setString(text.c_str());
-            L.hudText = text;
-        }
-    }
+    setHudLabel(pl, "drill-hud"_spr, text, L.hudText, "bigFont.fnt", .32f, {.5f, 1.f}, {win.width / 2, win.height - 24.f},
+                {255, 255, 255}, std::min(300.f, win.width * .6f));
 
-    // Session Manager
+    // Session Manager: klein links oben, damit Fortschrittsbalken und Pause-Knopf frei bleiben
     std::string stext;
     auto& P = planRun();
-    if (P.active) {
+    if (P.active && !P.steps.empty()) {
         auto st = phaseAt(P.steps, P.elapsed);
-        if (!P.steps.empty()) {
-            stext = fmt::format("SESSION {}/{}  {}  {} / {}{}", st.index + 1, P.steps.size(),
-                                phaseName(P.steps[static_cast<std::size_t>(st.index)].phase), clockText(st.inPhase),
-                                clockText(st.phaseLen), P.paused ? "  (PAUSE)" : "");
-        }
+        stext = fmt::format("Session {}/{}: {} - noch {}{}", st.index + 1, P.steps.size(),
+                            phaseName(P.steps[static_cast<std::size_t>(st.index)].phase),
+                            clockText(std::max(0.0, st.phaseLen - st.inPhase)), P.paused ? " (Pause)" : "");
     }
-    auto shud = static_cast<CCLabelBMFont*>(pl->getChildByID("session-hud"_spr));
-    if (stext.empty()) {
-        if (shud) shud->setVisible(false);
-        L.sessionText.clear();
-        return;
-    }
-    if (!shud) {
-        shud = CCLabelBMFont::create("", "bigFont.fnt");
-        shud->setID("session-hud"_spr);
-        shud->setScale(.28f);
-        shud->setAnchorPoint({1.f, 1.f});
-        shud->setColor({0, 214, 255});
-        shud->setOpacity(210);
-        shud->setPosition({win.width - 6.f, win.height - 4.f});
-        pl->addChild(shud, 1001);
-        L.sessionText.clear();
-    }
-    shud->setVisible(true);
-    if (stext != L.sessionText) {
-        shud->setString(stext.c_str());
-        L.sessionText = stext;
-    }
+    setHudLabel(pl, "session-hud"_spr, stext, L.sessionText, "chatFont.fnt", .5f, {0.f, 1.f}, {6.f, win.height - 4.f},
+                {0, 214, 255}, std::min(150.f, win.width * .28f));
 }
 
 // ---------------- Knoepfe ----------------

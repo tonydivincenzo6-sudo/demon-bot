@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <unordered_set>
 
 using namespace geode::prelude;
 
@@ -33,6 +34,7 @@ int64_t g_lastActivity = 0;
 Live g_live;
 PlanRun g_plan;
 LibraryScan g_scan;
+std::unordered_set<std::string> g_scanFailed;   // Level, die sich nicht lesen liessen (nur bis zum Neustart merken)
 std::string g_pendingKey;   // Drill, der beim naechsten Start dieses Levels beginnen soll
 int g_pendingFrom = -1;
 int g_pendingTo = -1;
@@ -123,9 +125,11 @@ void resetLive(bool releaseCheckpoint) {
     g_live = Live{};
 }
 
-// Aufbau des Levels aus den Portalen der geladenen Objekte
-void scanShape(PlayLayer* pl, LevelStats& ls) {
-    if (ls.shape.known() || !pl->m_objects || pl->m_levelLength <= 0.f) return;
+// Aufbau des Levels aus den Portalen der geladenen Objekte. true = erledigt (gelesen oder schon bekannt);
+// false = Level noch nicht fertig geladen, spaeter erneut versuchen
+bool scanShape(PlayLayer* pl, LevelStats& ls) {
+    if (ls.shape.known()) return true;
+    if (!pl->m_objects || pl->m_objects->count() == 0 || pl->m_levelLength <= 0.f) return false;
     std::vector<Portal> portals;
     int objects = 0;
     for (unsigned int i = 0; i < pl->m_objects->count(); i++) {
@@ -137,6 +141,8 @@ void scanShape(PlayLayer* pl, LevelStats& ls) {
     }
     int start = pl->m_levelSettings ? pl->m_levelSettings->m_startMode : 0;
     ls.shape = buildShape(std::move(portals), static_cast<Mode>(std::clamp(start, 0, MODES - 1)), pl->m_levelLength, objects);
+    markDirty();
+    return true;
 }
 
 // ---------------- Versuche ----------------
@@ -294,7 +300,7 @@ void onLevelEnter(PlayLayer* pl, GJGameLevel* level) {
     ls.demonDifficulty = level->m_demon.value() > 0 ? level->m_demonDifficulty : -1;
     ls.platformer = L.platformer;
     ls.main = level->m_levelType == GJLevelType::Main;
-    scanShape(pl, ls);
+    L.shapeDone = scanShape(pl, ls);
     auto now = unixNow();
     ls.lastPlayed = now;
     g_db.session(now, g_lastActivity, SESSION_GAP);
@@ -461,6 +467,7 @@ void afterUpdate(PlayLayer* pl, float gameDt) {
         }
     }
     drillTick(pl, pct, isAlive);
+    if (!L.shapeDone) L.shapeDone = scanShape(pl, ls);   // falls das Level beim Start noch nicht fertig geladen war
     if (!L.heatmapReady) buildHeatmap(pl);
     updateHud(pl);
     // gespeichert wird nie waehrend des Spielens (kein Ruckler): beim Pausieren, Levelende und Verlassen
@@ -732,7 +739,7 @@ void libraryScanStart() {
     // offizielle Level 1-22
     for (int i = 1; i <= 22; i++) {
         auto key = fmt::format("main-{}", i);
-        if (!g_db.shapeOf(key)) S.queue.push_back({i, true});
+        if (!g_db.shapeOf(key) && !g_scanFailed.contains(key)) S.queue.push_back({i, true});
     }
     // alle gespeicherten Online-Level (alles, was du je geoeffnet hast)
     if (auto dict = glm->m_onlineLevels) {
@@ -741,7 +748,8 @@ void libraryScanStart() {
             if (!lvl) continue;
             int id = lvl->m_levelID.value();
             if (id <= 0) continue;
-            if (!g_db.shapeOf(fmt::format("online-{}", id))) S.queue.push_back({id, false});
+            auto key = fmt::format("online-{}", id);
+            if (!g_db.shapeOf(key) && !g_scanFailed.contains(key)) S.queue.push_back({id, false});
         }
     }
     S.total = S.queue.size();
@@ -758,15 +766,20 @@ void libraryScanStep(double budgetSec) {
         auto [id, isMain] = S.queue.back();
         S.queue.pop_back();
         S.done++;
+        auto key = fmt::format("{}-{}", isMain ? "main" : "online", id);
         GJGameLevel* lvl = nullptr;
         if (glm) lvl = isMain ? glm->getMainLevel(id, false) : glm->getSavedLevel(id);
         if (!lvl) continue;
         std::string packed = lvl->m_levelString;
-        if (packed.empty()) continue;
-        std::string data = ZipUtils::decompressString(packed, false, 0);
-        if (data.empty()) continue;
-        auto res = scanLevelString(data);
-        if (!res.ok) continue;
+        if (packed.empty()) continue;   // nie heruntergeladen: vielleicht spaeter
+        // meistens gepackt (Base64 + gzip); unverpackte Level beginnen direkt mit den Einstellungen
+        bool raw = packed.rfind("kS", 0) == 0 || packed.rfind("kA", 0) == 0;
+        std::string data = raw ? packed : std::string(ZipUtils::decompressString(packed, false, 0));
+        auto res = data.empty() ? ScanResult{} : scanLevelString(data);
+        if (!res.ok) {
+            g_scanFailed.insert(key);
+            continue;
+        }
         LevelInfo info;
         info.name = std::string(lvl->m_levelName);
         info.levelID = id;
@@ -775,7 +788,7 @@ void libraryScanStep(double budgetSec) {
         info.platformer = res.platformer || lvl->isPlatformer();
         info.main = isMain;
         info.shape = res.shape;
-        g_db.library[fmt::format("{}-{}", isMain ? "main" : "online", id)] = std::move(info);
+        g_db.library[key] = std::move(info);
         markDirty();
     }
     if (S.queue.empty()) {

@@ -54,6 +54,29 @@ int difficultyTier(int stars, int demonDifficulty) {
     return 8;   // 10 Sterne ohne Demon-Stufe: wie ein Hard Demon behandeln
 }
 
+int mainLevelTier(int levelID) {
+    //                       1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22
+    static const int T[] = {1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 6, 5, 5, 4, 6, 4, 6, 5, 5};
+    if (levelID < 1 || levelID > 22) return -1;
+    return T[levelID - 1];
+}
+
+int levelTier(LevelStats const& l) {
+    if (l.main) {
+        int t = mainLevelTier(l.levelID);
+        if (t >= 0) return t;
+    }
+    return difficultyTier(l.stars, l.demonDifficulty);
+}
+
+int levelTier(LevelInfo const& l) {
+    if (l.main) {
+        int t = mainLevelTier(l.levelID);
+        if (t >= 0) return t;
+    }
+    return difficultyTier(l.stars, l.demonDifficulty);
+}
+
 double tierWeight(int tier) {
     static const double W[] = {0.6, 0.6, 0.75, 1.0, 1.35, 1.8, 2.5, 3.2, 4.0, 5.2, 6.8};
     if (tier < 0 || tier > 10) return 1.0;
@@ -119,7 +142,7 @@ SkillProfile computeSkills(Database const& db) {
     double ratioSum = 0, ratioWeight = 0;
 
     for (auto const& [key, l] : db.levels) {
-        int tier = difficultyTier(l.stars, l.demonDifficulty);
+        int tier = levelTier(l);
         double w = tierWeight(tier);
         for (int m = 0; m < MODES; m++) {
             weighted[m] += l.modeTime[m] * w;
@@ -133,8 +156,8 @@ SkillProfile computeSkills(Database const& db) {
         if (l.totalAttempts() > 0 || l.playTime > 0) sp.levelsPlayed++;
         if (l.selfCompleted()) {
             sp.selfCompleted++;
-            int d = demonIndex(l.demonDifficulty);
-            if (d >= 0) sp.demons[d]++;
+            int d = tier >= 6 ? tier - 6 : -1;   // Demon-Stufe 0 (Easy) .. 4 (Extreme)
+            if (d >= 0 && d < DEMON_TIERS) sp.demons[d]++;
             sp.highestTier = std::max(sp.highestTier, tier);
             int64_t t = completionTime(l);
             if (t >= sp.lastCompletedAt) {
@@ -310,7 +333,7 @@ std::vector<LevelPick> recommendLevels(Database const& db, SkillProfile const& s
     std::map<std::string, Cand> cands;
     for (auto const& [key, info] : db.library) {
         if (info.platformer || !info.shape.known()) continue;
-        cands[key] = {info.name, info.levelID, info.main, difficultyTier(info.stars, info.demonDifficulty), &info.shape, false};
+        cands[key] = {info.name, info.levelID, info.main, levelTier(info), &info.shape, false};
     }
     for (auto const& [key, l] : db.levels) {
         if (l.selfCompleted()) {
@@ -322,7 +345,7 @@ std::vector<LevelPick> recommendLevels(Database const& db, SkillProfile const& s
             if (it != cands.end()) it->second.started = l.totalAttempts() > 0;
             continue;
         }
-        cands[key] = {l.name, l.levelID, l.main, difficultyTier(l.stars, l.demonDifficulty), &l.shape, l.totalAttempts() > 0};
+        cands[key] = {l.name, l.levelID, l.main, levelTier(l), &l.shape, l.totalAttempts() > 0};
     }
 
     std::vector<LevelPick> out;
@@ -369,7 +392,7 @@ std::vector<SectionPick> recommendSections(Database const& db, SkillProfile cons
     std::vector<SectionPick> out;
     for (auto const& [key, l] : db.levels) {
         if (l.platformer || l.totalDeaths() < 5) continue;
-        int tier = difficultyTier(l.stars, l.demonDifficulty);
+        int tier = levelTier(l);
         auto hs = hotspots(l.allDeaths(), 3, window, leadIn);
         for (auto const& h : hs) {
             bool mastered = false;
@@ -695,7 +718,7 @@ std::vector<double> demonsPerMonth(Database const& db, int64_t now, int tzOffset
     civilFromDays(dayIndex(now, tzOffset), y, m, d);
     int nowMonth = y * 12 + (m - 1);
     for (auto const& [key, l] : db.levels) {
-        if (!l.selfCompleted() || demonIndex(l.demonDifficulty) < 0) continue;
+        if (!l.selfCompleted() || levelTier(l) < 6) continue;
         int64_t t = completionTime(l);
         if (t <= 0) continue;
         civilFromDays(dayIndex(t, tzOffset), y, m, d);
@@ -709,7 +732,7 @@ std::vector<std::pair<double, double>> attemptsVsTier(Database const& db) {
     std::vector<std::pair<double, double>> out;
     for (auto const& [key, l] : db.levels) {
         if (!l.completedLegit || l.attemptsAtCompletion <= 0) continue;
-        int tier = difficultyTier(l.stars, l.demonDifficulty);
+        int tier = levelTier(l);
         if (tier < 0) continue;
         out.push_back({static_cast<double>(tier), static_cast<double>(l.attemptsAtCompletion)});
     }

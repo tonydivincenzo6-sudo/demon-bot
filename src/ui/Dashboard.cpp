@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 using namespace geode::prelude;
 using namespace sf::ui;
@@ -38,6 +39,8 @@ protected:
     int m_plan = 90;
     CCNode* m_content = nullptr;
     CCNode* m_tabs = nullptr;
+    CCMenu* m_menu = nullptr;      // Knoepfe des aktuellen Bereichs
+    CCMenu* m_tabMenu = nullptr;   // Reiter
     double m_lastRefresh = 0;
     bool m_wasScanning = false;
 
@@ -47,7 +50,7 @@ protected:
         if (m_bgSprite) m_bgSprite->setVisible(false);
         if (m_buttonMenu) m_buttonMenu->setZOrder(100);
 
-        auto bg = CCDrawNode::create();
+        auto bg = drawNode();
         roundRect(bg, {0, 0, W, H}, 14.f, rgba(0, 0, 0, 0), 4.f, withAlpha(CYAN, .12f));
         roundRect(bg, {0, 0, W, H}, 14.f, rgba(0, 0, 0, 0), 2.2f, withAlpha(CYAN, .25f));
         roundRect(bg, {0, 0, W, H}, 14.f, BG, 1.f, CYAN);
@@ -81,6 +84,23 @@ protected:
         this->later();
     }
 
+    // gerade wird ein Knopf gedrueckt gehalten: dann nicht neu aufbauen (sonst ginge der Klick verloren)
+    static bool pressing(CCMenu* menu) {
+        if (!menu || !menu->getChildren()) return false;
+        auto children = menu->getChildren();
+        for (unsigned int i = 0; i < children->count(); i++) {
+            auto item = typeinfo_cast<CCMenuItem*>(children->objectAtIndex(i));
+            if (item && item->isSelected()) return true;
+        }
+        return false;
+    }
+
+    // Level oeffnen: erst dieses Fenster schliessen, dann die Szene wechseln
+    void leaveTo(std::function<void()> go) {
+        this->onClose(nullptr);   // danach "this" nicht mehr benutzen
+        go();
+    }
+
     // Bibliothek nebenbei analysieren, laufende Session-Uhr auffrischen
     void tick(float) {
         auto& scan = libraryScan();
@@ -91,7 +111,7 @@ protected:
         if (scan.running && m_tab == 2 && now - m_lastRefresh > .7) refresh = true;
         if (planRun().active && (m_tab == 0 || m_tab == 4) && now - m_lastRefresh > 1.0) refresh = true;
         m_wasScanning = scan.running;
-        if (refresh) this->rebuild();
+        if (refresh && !pressing(m_menu) && !pressing(m_tabMenu)) this->rebuild();
     }
 
     void buildTabs() {
@@ -99,6 +119,7 @@ protected:
         auto menu = CCMenu::create();
         menu->setPosition({0.f, 0.f});
         m_tabs->addChild(menu);
+        m_tabMenu = menu;
         for (int i = 0; i < TAB_COUNT; i++) {
             button(menu, TABS[i], {50.f + i * 80.f, H - 52.f}, {76.f, 17.f}, CYAN, i == m_tab,
                    [this, i](CCMenuItemSpriteExtra*) { this->switchTab(i); });
@@ -112,6 +133,7 @@ protected:
         auto menu = CCMenu::create();
         menu->setPosition({0.f, 0.f});
         m_content->addChild(menu, 5);
+        m_menu = menu;
 
         auto& d = db();
         auto sp = computeSkills(d);
@@ -183,7 +205,7 @@ protected:
         if (P.active && !P.steps.empty()) {
             auto st = phaseAt(P.steps, P.elapsed);
             text(m_content, fmt::format("Session laeuft: Phase {}/{}", st.index + 1, P.steps.size()), {346.f, 204.f}, .44f,
-                 to3(CYAN));
+                 to3(CYAN), {0.f, .5f}, 136.f);
             heading(m_content, phaseName(P.steps[static_cast<std::size_t>(st.index)].phase), {346.f, 190.f}, CYAN, .3f, {0.f, .5f},
                     136.f);
             text(m_content, fmt::format("{} / {}{}", clockText(st.inPhase), clockText(st.phaseLen), P.paused ? " (Pause)" : ""),
@@ -227,7 +249,7 @@ protected:
             if (i < MODES) amount = v.amount >= 1 ? fmt::format("{} min", std::lround(v.amount)) : "keine Daten";
             else if (i == S_CONSISTENCY) amount = v.amount >= 1 ? fmt::format("{} Proben", std::lround(v.amount)) : "keine Daten";
             else amount = v.amount >= 1 ? fmt::format("{} min ab 60 min", std::lround(v.amount)) : "lange Sessions fehlen";
-            text(m_content, amount, {cx, cy - 43.f}, .38f, GRAY3, {.5f, .5f});
+            text(m_content, amount, {cx, cy - 43.f}, .38f, GRAY3, {.5f, .5f}, 88.f);
         }
         if (sp.strongest >= 0) {
             text(m_content, fmt::format("Hoechste Faehigkeit: {} ({})", skillName(sp.strongest), percentText(sp.values[sp.strongest].score)),
@@ -276,14 +298,15 @@ protected:
                 auto key = p.key;
                 int id = p.levelID;
                 bool main = p.main;
-                button(menu, "OEFFNEN", {214.f, y}, {50.f, 16.f}, CYAN, false,
-                       [key, id, main](CCMenuItemSpriteExtra*) { openLevel(key, id, main); });
+                button(menu, "OEFFNEN", {214.f, y}, {50.f, 16.f}, CYAN, false, [this, key, id, main](CCMenuItemSpriteExtra*) {
+                    this->leaveTo([key, id, main] { openLevel(key, id, main); });
+                });
             }
             y -= 32.f;
         }
         if (!lvl) {
             button(menu, fmt::format("ONLINE SUCHEN: {}", tierName(fs.targetTier)), {128.f, 22.f}, {210.f, 16.f}, GOLD, false,
-                   [tier = fs.targetTier](CCMenuItemSpriteExtra*) { openSearch(tier); });
+                   [this, tier = fs.targetTier](CCMenuItemSpriteExtra*) { this->leaveTo([tier] { openSearch(tier); }); });
         } else {
             text(m_content, "Level oeffnen geht nur ausserhalb eines Levels.", {128.f, 22.f}, .4f, GRAY3, {.5f, .5f}, 220.f);
         }
@@ -307,9 +330,9 @@ protected:
                 auto key = s.key;
                 int id = s.levelID, from = s.from, to = s.to;
                 bool main = s.main;
-                button(menu, "DRILL", {460.f, y}, {44.f, 16.f}, PURPLE, true, [key, id, main, from, to](CCMenuItemSpriteExtra*) {
+                button(menu, "DRILL", {460.f, y}, {44.f, 16.f}, PURPLE, true, [this, key, id, main, from, to](CCMenuItemSpriteExtra*) {
                     requestDrill(key, from, to);
-                    openLevel(key, id, main);
+                    this->leaveTo([key, id, main] { openLevel(key, id, main); });
                 });
             }
             y -= 32.f;
@@ -327,7 +350,7 @@ protected:
         heading(m_content, "5. DEMON COACH & PROGRESSION", {18.f, TOP - 12.f}, PURPLE, .32f);
         static char const* const TIER_SHORT[] = {"EASY", "MEDIUM", "HARD", "INSANE", "EXTREME"};
         ccColor4F const cols[] = {CYAN, rgba(110, 150, 255), PURPLE, rgba(220, 80, 200), RED};
-        auto path = CCDrawNode::create();
+        auto path = drawNode();
         float y = 172.f;
         for (int i = 0; i < DEMON_TIERS - 1; i++) {
             float x0 = 60.f + i * 95.f, x1 = 60.f + (i + 1) * 95.f;
@@ -370,7 +393,7 @@ protected:
         if (!inLevel()) {
             int tier = 6 + (c.current < 0 ? 0 : c.next);
             button(menu, fmt::format("DEMONS SUCHEN: {}", tierName(tier)), {128.f, 24.f}, {210.f, 16.f}, GOLD, false,
-                   [tier](CCMenuItemSpriteExtra*) { openSearch(tier); });
+                   [this, tier](CCMenuItemSpriteExtra*) { this->leaveTo([tier] { openSearch(tier); }); });
         }
 
         // Improvement Engine
@@ -435,7 +458,7 @@ protected:
         heading(m_content, fmt::format("7. SESSION MANAGER ({} MINUTEN)", total), {202.f, TOP - 12.f}, PURPLE, .3f, {0.f, .5f}, 280.f);
         auto st = phaseAt(steps, P.active ? P.elapsed : -1.0);
         int current = P.active ? st.index : -1;
-        auto line = CCDrawNode::create();
+        auto line = drawNode();
         float top = 196.f, step = 38.f;
         float bottom = top - step * static_cast<float>(std::max<std::size_t>(steps.size(), 1) - 1);
         line->drawSegment({214.f, top}, {214.f, bottom}, .6f, DIM);

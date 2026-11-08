@@ -14,6 +14,11 @@ namespace sf {
 // ---------------- Schwierigkeit ----------------
 // -1 unbewertet, 0 Auto, 1 Easy, 2 Normal, 3 Hard, 4 Harder, 5 Insane, 6 Easy Demon .. 10 Extreme Demon
 int difficultyTier(int stars, int demonDifficulty);
+// Offizielle Level 1-22: Schwierigkeit aus GD (Sterne passen dort nicht zur Stufe, z. B. xStep 10 Sterne = Insane);
+// die drei offiziellen Demons gelten wie in der Community als Easy Demons. -1 = unbekannt
+int mainLevelTier(int levelID);
+int levelTier(LevelStats const& l);
+int levelTier(LevelInfo const& l);
 double tierWeight(int tier);
 char const* tierName(int tier);
 int demonIndex(int demonDifficulty);   // 0 Easy .. 4 Extreme, -1 kein Demon

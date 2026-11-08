@@ -52,6 +52,10 @@ inline ccColor4F const DIM = rgba(40, 48, 84);
 ccColor4F modeColor(Mode m);
 ccColor4F scoreColor(double score);   // rot -> orange -> lila -> cyan
 
+// Zeichenflaeche mit normaler Transparenz (cocos rechnet sonst mit vormultipliziertem Alpha: halbtransparente Farben
+// wuerden viel zu hell)
+CCDrawNode* drawNode();
+
 // Formen
 void roundRect(CCDrawNode* dn, CCRect r, float radius, ccColor4F fill, float border, ccColor4F borderColor);
 CCDrawNode* panel(CCNode* parent, CCRect r, ccColor4F accent, int z = 0);   // Neon-Panel mit Glow

@@ -466,7 +466,9 @@ Database Database::fromJson(matjson::Value const& v) {
         for (auto const& item : v["levels"]) {
             auto key = item.getKey();
             if (!key || key->empty() || !item.isObject()) continue;
-            db.levels[*key] = levelFromJson(item);
+            auto& l = db.levels[*key];
+            l = levelFromJson(item);
+            if (key->rfind("main-", 0) == 0) l.main = true;   // aeltere Dateien kannten das Feld noch nicht
         }
     }
     if (v.contains("sessions") && v["sessions"].isArray()) {
