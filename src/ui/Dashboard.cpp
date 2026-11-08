@@ -527,6 +527,17 @@ protected:
     }
 
 public:
+    // kleine Bildschirme (z. B. 4:3-Tablets): ganzes Fenster verkleinern statt abschneiden
+    void show() override {
+        Popup::show();
+        auto win = CCDirector::get()->getWinSize();
+        float fit = std::min({1.f, (win.width - 8.f) / W, (win.height - 8.f) / H});
+        if (fit < 1.f && m_mainLayer) {
+            m_mainLayer->stopAllActions();
+            m_mainLayer->setScale(fit);
+        }
+    }
+
     static Dashboard* create(int tab) {
         auto ret = new Dashboard();
         if (ret->init(tab)) {

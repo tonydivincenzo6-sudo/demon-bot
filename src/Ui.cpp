@@ -261,6 +261,16 @@ protected:
     }
 
 public:
+    void show() override {
+        Popup::show();
+        auto win = CCDirector::get()->getWinSize();
+        float fit = std::min({1.f, (win.width - 8.f) / LW, (win.height - 8.f) / LH});
+        if (fit < 1.f && m_mainLayer) {
+            m_mainLayer->stopAllActions();
+            m_mainLayer->setScale(fit);
+        }
+    }
+
     static LevelPopup* create(std::string key) {
         auto ret = new LevelPopup();
         if (ret->init(std::move(key))) {
