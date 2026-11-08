@@ -199,18 +199,18 @@ protected:
         if (!ls->platformer && levelLive && m_from >= 0 && m_to > m_from) {
             float dy = 80.f;
             heading(m_content, fmt::format("ABSCHNITT {}% - {}%", m_from, m_to), {22.f, dy}, CYAN, .32f);
-            auto small = [&](char const* label, float x, auto fn) {
+            auto stepButton = [&](char const* label, float x, auto fn) {
                 button(menu, label, {x, dy}, {20.f, 16.f}, CYAN, false, [this, fn](CCMenuItemSpriteExtra*) {
                     fn();
                     this->later();
                 });
             };
             text(m_content, "Start", {214.f, dy}, .45f, GRAY3, {1.f, .5f});
-            small("-", 228.f, [this] { m_from = std::max(0, m_from - 1); });
-            small("+", 252.f, [this] { m_from = std::min(m_to - 1, m_from + 1); });
+            stepButton("-", 228.f, [this] { m_from = std::max(0, m_from - 1); });
+            stepButton("+", 252.f, [this] { m_from = std::min(m_to - 1, m_from + 1); });
             text(m_content, "Ende", {306.f, dy}, .45f, GRAY3, {1.f, .5f});
-            small("-", 320.f, [this] { m_to = std::max(m_from + 1, m_to - 1); });
-            small("+", 344.f, [this] { m_to = std::min(100, m_to + 1); });
+            stepButton("-", 320.f, [this] { m_to = std::max(m_from + 1, m_to - 1); });
+            stepButton("+", 344.f, [this] { m_to = std::min(100, m_to + 1); });
 
             auto cfg = drillConfig();
             std::string status;

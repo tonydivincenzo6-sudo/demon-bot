@@ -21,7 +21,7 @@ static int checks = 0;
         }                                                                   \
     } while (0)
 
-static bool near(double a, double b, double eps = 1e-6) { return std::fabs(a - b) < eps; }
+static bool approx(double a, double b, double eps = 1e-6) { return std::fabs(a - b) < eps; }
 
 static void testRoundTrip() {
     Database db;
@@ -86,12 +86,12 @@ static void testRoundTrip() {
     CHECK(l2->demonDifficulty == 4);
     CHECK(!l2->platformer);
     CHECK(l2->attempts[0] == 12 && l2->attempts[1] == 340 && l2->attempts[2] == 5);
-    CHECK(near(l2->best[0], 47.5) && near(l2->best[1], 100) && near(l2->best[2], 63));
+    CHECK(approx(l2->best[0], 47.5) && approx(l2->best[1], 100) && approx(l2->best[2], 63));
     CHECK(l2->deaths[0][47] == 9 && l2->deaths[1][50] == 21 && l2->deaths[1][99] == 2);
     CHECK(l2->totalDeaths() == 32);
     CHECK(l2->modeDeaths[static_cast<int>(Mode::Wave)] == 30);
-    CHECK(near(l2->modeTime[static_cast<int>(Mode::Wave)], 123.4, 0.051));
-    CHECK(near(l2->playTime, 3600.5, 0.051));
+    CHECK(approx(l2->modeTime[static_cast<int>(Mode::Wave)], 123.4, 0.051));
+    CHECK(approx(l2->playTime, 3600.5, 0.051));
     CHECK(l2->flaggedRuns == 3);
     CHECK(l2->completedLegit && l2->completedAt == 1762600000 && l2->attemptsAtCompletion == 112);
     CHECK(l2->manualCompleted && l2->selfCompleted());
@@ -99,22 +99,22 @@ static void testRoundTrip() {
     if (!l2->sections.empty()) {
         auto const& s2 = l2->sections[0];
         CHECK(s2.from == 42 && s2.to == 51);
-        CHECK(near(s2.speed, 0.85));
+        CHECK(approx(s2.speed, 0.85));
         CHECK(s2.streak == 2 && s2.tries == 17 && s2.success == 9);
         CHECK(s2.recent.size() == 3 && s2.recent[0] && !s2.recent[1] && s2.recent[2]);
-        CHECK(near(s2.masteredSpeed, 1.0) && s2.masteredAt == 1762600100);
+        CHECK(approx(s2.masteredSpeed, 1.0) && s2.masteredAt == 1762600100);
     }
     CHECK(l2->runs.size() == 2);
     if (l2->runs.size() == 2) {
         CHECK(l2->runs[0].kind == RunKind::Practice && l2->runs[0].died && !l2->runs[0].done);
-        CHECK(near(l2->runs[0].from, 12.3, 0.051) && near(l2->runs[0].to, 48.9, 0.051));
+        CHECK(approx(l2->runs[0].from, 12.3, 0.051) && approx(l2->runs[0].to, 48.9, 0.051));
         CHECK(l2->runs[1].kind == RunKind::Normal && !l2->runs[1].died && l2->runs[1].done);
     }
     CHECK(l2->lastPlayed == 1762600300);
     CHECK(db2.sessions.size() == 1);
     if (!db2.sessions.empty()) {
         CHECK(db2.sessions[0].start == 1762500000 && db2.sessions[0].attempts == 40 && db2.sessions[0].deaths == 35);
-        CHECK(near(db2.sessions[0].seconds, 1800.5, 0.051));
+        CHECK(approx(db2.sessions[0].seconds, 1800.5, 0.051));
     }
 }
 
@@ -159,7 +159,7 @@ static void testHotspots() {
     CHECK(h.size() == 1);
     if (!h.empty()) {
         CHECK(h[0].deaths == 10);
-        CHECK(near(h[0].share, 1.0));
+        CHECK(approx(h[0].share, 1.0));
         CHECK(h[0].from <= 50 && h[0].to > 50);
         CHECK(h[0].from >= 44 && h[0].to <= 56);   // Tod liegt etwa mittig
         CHECK(h[0].to - h[0].from == 10);          // 8 Kern + 2 Anlauf
@@ -205,8 +205,8 @@ static void testModeRates() {
     auto r = modeRates(deaths, secs, 0.5);
     CHECK(r.size() == 2);
     if (r.size() == 2) {
-        CHECK(r[0].mode == Mode::Wave && near(r[0].perMinute, 6.0));
-        CHECK(r[1].mode == Mode::Cube && near(r[1].perMinute, 1.0));
+        CHECK(r[0].mode == Mode::Wave && approx(r[0].perMinute, 6.0));
+        CHECK(r[1].mode == Mode::Cube && approx(r[1].perMinute, 1.0));
     }
 }
 
@@ -217,25 +217,25 @@ static void testDrill() {
     s.from = 40;
     s.to = 50;
     drillPrepare(s, c);
-    CHECK(near(s.speed, 0.8));
+    CHECK(approx(s.speed, 0.8));
     CHECK(drillGoal(s, c) == 3);
 
     // 2 geschafft, 1 gestorben: Serie weg, kein Tempowechsel
     CHECK(drillAttempt(s, true, c, 1) == DrillEvent::None);
     CHECK(drillAttempt(s, true, c, 1) == DrillEvent::None);
     CHECK(drillAttempt(s, false, c, 1) == DrillEvent::None);
-    CHECK(s.streak == 0 && near(s.speed, 0.8));
+    CHECK(s.streak == 0 && approx(s.speed, 0.8));
 
     // 3 in Folge: schneller
     drillAttempt(s, true, c, 1);
     drillAttempt(s, true, c, 1);
     CHECK(drillAttempt(s, true, c, 1) == DrillEvent::SpeedUp);
-    CHECK(near(s.speed, 0.85) && s.streak == 0 && s.recent.empty());
+    CHECK(approx(s.speed, 0.85) && s.streak == 0 && s.recent.empty());
 
     // bis zum Zieltempo hochspielen
     int guard = 0;
     while (s.speed < 1.0 - 1e-9 && guard++ < 100) drillAttempt(s, true, c, 2);
-    CHECK(near(s.speed, 1.0));
+    CHECK(approx(s.speed, 1.0));
     CHECK(drillGoal(s, c) == 5);
     CHECK(!drillMastered(s, c));
 
@@ -245,7 +245,7 @@ static void testDrill() {
     CHECK(drillMastered(s, c) && s.masteredAt == 3);
     // erneut 5 in Folge: keine zweite Meldung
     for (int i = 0; i < 5; i++) CHECK(drillAttempt(s, true, c, 4) == DrillEvent::None);
-    CHECK(near(s.speed, 1.0));   // nie ueber das Ziel
+    CHECK(approx(s.speed, 1.0));   // nie ueber das Ziel
 
     // schlechte Quote: Tempo runter (erst ab 6 Ergebnissen)
     Section t;
@@ -255,18 +255,18 @@ static void testDrill() {
     t.speed = 0.9;
     for (int i = 0; i < 5; i++) CHECK(drillAttempt(t, false, c, 5) == DrillEvent::None);
     CHECK(drillAttempt(t, false, c, 5) == DrillEvent::SpeedDown);
-    CHECK(near(t.speed, 0.85) && t.recent.empty());
+    CHECK(approx(t.speed, 0.85) && t.recent.empty());
 
     // nie unter das Minimum
     t.speed = 0.5;
     for (int i = 0; i < 20; i++) CHECK(drillAttempt(t, false, c, 6) != DrillEvent::SpeedDown);
-    CHECK(near(t.speed, 0.5));
+    CHECK(approx(t.speed, 0.5));
 
     // Ziel gesenkt: Tempo wird beim naechsten Start begrenzt
     Section u;
     u.speed = 1.2;
     drillPrepare(u, c);
-    CHECK(near(u.speed, 1.0));
+    CHECK(approx(u.speed, 1.0));
 
     // brutal: Ziel 1,2
     DrillConfig b = c;
@@ -277,7 +277,7 @@ static void testDrill() {
     drillPrepare(v, b);
     guard = 0;
     while (v.speed < 1.2 - 1e-9 && guard++ < 200) drillAttempt(v, true, b, 7);
-    CHECK(near(v.speed, 1.2));
+    CHECK(approx(v.speed, 1.2));
 
     // kaputte Einstellungen werden begrenzt
     DrillConfig w;
@@ -322,12 +322,12 @@ static void testLevelScan() {
     auto r = scanLevelString(lvl);
     CHECK(r.ok);
     CHECK(!r.platformer);
-    CHECK(near(r.length, 1000));
+    CHECK(approx(r.length, 1000));
     CHECK(r.shape.objects == 4);
     CHECK(r.shape.known());
-    CHECK(near(r.shape.share[static_cast<int>(Mode::Ship)], 0.5, 1e-3));
-    CHECK(near(r.shape.share[static_cast<int>(Mode::Cube)], 0.2505, 1e-3));
-    CHECK(near(r.shape.share[static_cast<int>(Mode::Wave)], 0.2495, 1e-3));
+    CHECK(approx(r.shape.share[static_cast<int>(Mode::Ship)], 0.5, 1e-3));
+    CHECK(approx(r.shape.share[static_cast<int>(Mode::Cube)], 0.2505, 1e-3));
+    CHECK(approx(r.shape.share[static_cast<int>(Mode::Wave)], 0.2495, 1e-3));
     CHECK(r.shape.segments.size() == 3);
     CHECK(r.shape.modeAt(10) == Mode::Ship);
     CHECK(r.shape.modeAt(60) == Mode::Cube);
@@ -339,8 +339,8 @@ static void testLevelScan() {
     CHECK(r2.ok && r2.platformer);
     CHECK(r2.shape.segments.size() == 2);
     CHECK(r2.shape.segments.front().mode == Mode::Wave);
-    CHECK(near(r2.shape.share[static_cast<int>(Mode::Wave)], 0.5, 1e-3));
-    CHECK(near(r2.shape.share[static_cast<int>(Mode::Ship)], 0.5, 1e-3));
+    CHECK(approx(r2.shape.share[static_cast<int>(Mode::Wave)], 0.5, 1e-3));
+    CHECK(approx(r2.shape.share[static_cast<int>(Mode::Ship)], 0.5, 1e-3));
 
     // Muell: kein Absturz, ok=false
     char const* bad[] = {"", ";;;", "abc", "kA2,9;1,abc,2,5", "kA2,1;1,12", "kA2,1;,,,;1,-5,2,10"};
@@ -370,9 +370,9 @@ static void testModelV2() {
     ss.addTime(500);
     ss.addDeath();
     CHECK(ss.blocks.size() == 2);
-    CHECK(near(ss.blocks[0].seconds, 900) && ss.blocks[0].deaths == 0);   // 1000 s: 900 in Block 0, 100 in Block 1
-    CHECK(near(ss.blocks[1].seconds, 600) && ss.blocks[1].deaths == 2);
-    CHECK(near(ss.seconds, 1500) && ss.deaths == 2);
+    CHECK(approx(ss.blocks[0].seconds, 900) && ss.blocks[0].deaths == 0);   // 1000 s: 900 in Block 0, 100 in Block 1
+    CHECK(approx(ss.blocks[1].seconds, 600) && ss.blocks[1].deaths == 2);
+    CHECK(approx(ss.seconds, 1500) && ss.deaths == 2);
     db.sessions.push_back(ss);
     LevelInfo info;
     info.name = "Wave Hell";
@@ -401,14 +401,14 @@ static void testModelV2() {
     auto const* l2 = db2.find("main-18");
     CHECK(l2 && l2->main && l2->manualAt == 1794000000 && l2->shape.known());
     if (l2) {
-        CHECK(near(l2->shape.share[static_cast<int>(Mode::Ship)], 0.5, 1e-3));
+        CHECK(approx(l2->shape.share[static_cast<int>(Mode::Ship)], 0.5, 1e-3));
         CHECK(l2->shape.modeAt(80) == Mode::Ship);
         CHECK(!l2->sections.empty() && l2->sections[0].lastTried == 1794000100);
     }
     CHECK(db2.sessions.size() == 1 && db2.sessions[0].end == 1794005000 && db2.sessions[0].blocks.size() == 2);
     CHECK(db2.library.size() == 1 && db2.library["online-777"].demonDifficulty == 4 && db2.library["online-777"].shape.known());
     CHECK(db2.shapeOf("online-777") != nullptr && db2.shapeOf("main-18") != nullptr && db2.shapeOf("x") == nullptr);
-    CHECK(db2.snapshots.count(20765) == 1 && near(db2.snapshots[20765][4], 55.5, 0.06) && db2.snapshots[20765][0] < 0);
+    CHECK(db2.snapshots.count(20765) == 1 && approx(db2.snapshots[20765][4], 55.5, 0.06) && db2.snapshots[20765][0] < 0);
     CHECK(db2.plans.size() == 1 && db2.plans[0].minutes == 90 && db2.plans[0].mastered == 2 && db2.plans[0].completions == 1);
 
     // altes Format aus Stufe 1 (Sitzungen mit 4 Werten, keine neuen Felder)
@@ -450,16 +450,16 @@ static void testSkills() {
     // Ship: nur 1 Minute -> zu wenig Daten
     db.levels["c"] = makeLevel("C", 4, -1, Mode::Ship, 60, 3);
     auto sp = computeSkills(db);
-    CHECK(near(sp.values[static_cast<int>(Mode::Wave)].score, 100.0 * (1.0 - std::exp(-19.2 / 25.0)), 0.01));
-    CHECK(near(sp.values[static_cast<int>(Mode::Cube)].score, 100.0 * (1.0 - std::exp(-60.0 / 25.0)), 0.01));
+    CHECK(approx(sp.values[static_cast<int>(Mode::Wave)].score, 100.0 * (1.0 - std::exp(-19.2 / 25.0)), 0.01));
+    CHECK(approx(sp.values[static_cast<int>(Mode::Cube)].score, 100.0 * (1.0 - std::exp(-60.0 / 25.0)), 0.01));
     CHECK(sp.values[static_cast<int>(Mode::Ship)].score < 0);
-    CHECK(near(sp.values[static_cast<int>(Mode::Ship)].amount, 1.0));
+    CHECK(approx(sp.values[static_cast<int>(Mode::Ship)].amount, 1.0));
     CHECK(sp.strongest == static_cast<int>(Mode::Cube) && sp.weakest == static_cast<int>(Mode::Wave));
     CHECK(sp.values[S_CONSISTENCY].score < 0 && sp.values[S_ENDURANCE].score < 0);
     CHECK(sp.playerClass == "Pre-Demon Player");
     CHECK(sp.attempts == 101 + 11 + 4);
     CHECK(weaknessOf(sp, Mode::Wave) > weaknessOf(sp, Mode::Cube));
-    CHECK(near(weaknessOf(sp, Mode::Ship), 0.35));
+    CHECK(approx(weaknessOf(sp, Mode::Ship), 0.35));
 
     // ohne Tode: Wert bleibt endlich und begrenzt
     Database z;
@@ -496,7 +496,7 @@ static void testSkills() {
         kl.addRun(r);
     }
     auto skp = computeSkills(k);
-    CHECK(near(skp.values[S_CONSISTENCY].score, 75.0, 0.01));
+    CHECK(approx(skp.values[S_CONSISTENCY].score, 75.0, 0.01));
 
     // Ausdauer: frueh 0,5 Tode/min, spaet 1,0 Tode/min -> (0,5+0,2)/(1,0+0,2) = 58,3
     Database e;
@@ -510,9 +510,9 @@ static void testSkills() {
     }
     e.sessions.push_back(s1);
     auto se = computeSkills(e);
-    CHECK(near(se.values[S_ENDURANCE].score, 100.0 * (14.0 / 30.0 + 0.2) / (1.0 + 0.2), 0.01));
+    CHECK(approx(se.values[S_ENDURANCE].score, 100.0 * (14.0 / 30.0 + 0.2) / (1.0 + 0.2), 0.01));
     auto snap = snapshotOf(se);
-    CHECK(near(snap[S_ENDURANCE], se.values[S_ENDURANCE].score, 0.01) && snap[0] < 0);
+    CHECK(approx(snap[S_ENDURANCE], se.values[S_ENDURANCE].score, 0.01) && snap[0] < 0);
 }
 
 static void testFarmAndCoach() {
@@ -550,7 +550,7 @@ static void testFarmAndCoach() {
     sec.lastTried = now - 3600;
     for (int i = 0; i < 10; i++) sec.recent.push_back(i < 3);
     fs = farmStatus(db, sp, now, 3);
-    CHECK(fs.band == Band::TooHard && near(fs.rate, 0.3) && fs.targetTier == 5);
+    CHECK(fs.band == Band::TooHard && approx(fs.rate, 0.3) && fs.targetTier == 5);
     // 90 % -> neue Herausforderung
     sec.recent.clear();
     for (int i = 0; i < 10; i++) sec.recent.push_back(i < 9);
@@ -586,7 +586,7 @@ static void testFarmAndCoach() {
     CHECK(!picks.empty());
     if (!picks.empty()) {
         CHECK(picks[0].key == "online-1");
-        CHECK(picks[0].focus == Mode::Wave && near(picks[0].focusShare, 1.0, 1e-3));
+        CHECK(picks[0].focus == Mode::Wave && approx(picks[0].focusShare, 1.0, 1e-3));
         CHECK(picks[0].reason.find("Wave") != std::string::npos);
     }
     bool hasBad = false;
@@ -680,7 +680,7 @@ static void testImprovementAndPlans() {
     auto st = phaseAt(p90, 0);
     CHECK(st.index == 0 && !st.finished);
     st = phaseAt(p90, 15 * 60 + 5);
-    CHECK(st.index == 1 && near(st.inPhase, 5) && near(st.phaseLen, 20 * 60));
+    CHECK(st.index == 1 && approx(st.inPhase, 5) && approx(st.phaseLen, 20 * 60));
     st = phaseAt(p90, 90 * 60 + 1);
     CHECK(st.finished && st.index == 4);
     CHECK(phaseAt({}, 10).finished);
@@ -731,9 +731,9 @@ static void testChartsAndTotals() {
     c.attempts = 7;
     db.sessions.push_back(c);
     auto pm = playMinutesPerDay(db, now, 0, 14);
-    CHECK(pm.size() == 14 && near(pm[13], 30) && near(pm[11], 10) && near(pm[0], 0));
+    CHECK(pm.size() == 14 && approx(pm[13], 30) && approx(pm[11], 10) && approx(pm[0], 0));
     auto aw = attemptsPerWeek(db, now, 0, 8);
-    CHECK(aw.size() == 8 && near(aw[7], 50) && near(aw[6], 7));
+    CHECK(aw.size() == 8 && approx(aw[7], 50) && approx(aw[6], 7));
 
     auto& l1 = db.levels["x"];
     l1.demonDifficulty = 3;
@@ -747,9 +747,9 @@ static void testChartsAndTotals() {
     l2.manualCompleted = true;
     l2.manualAt = now - 40 * 86400;   // Ende September
     auto dm = demonsPerMonth(db, now, 0, 12);
-    CHECK(dm.size() == 12 && near(dm[11], 1) && near(dm[9], 1));
+    CHECK(dm.size() == 12 && approx(dm[11], 1) && approx(dm[9], 1));
     auto sc = attemptsVsTier(db);
-    CHECK(sc.size() == 1 && near(sc[0].first, 6) && near(sc[0].second, 112));
+    CHECK(sc.size() == 1 && approx(sc[0].first, 6) && approx(sc[0].second, 112));
     auto& sec = l1.section(1, 5);
     sec.masteredSpeed = 1.0;
     auto t = totals(db, cfg);
@@ -762,9 +762,9 @@ static void testChartsAndTotals() {
     db.snapshots[20765] = s1;
     db.snapshots[20760] = s1;
     auto hist = skillHistory(db, now, 0, 10, -1);
-    CHECK(hist.size() == 10 && near(hist[9], 50) && near(hist[4], 50) && hist[8] < 0);
+    CHECK(hist.size() == 10 && approx(hist[9], 50) && approx(hist[4], 50) && hist[8] < 0);
     auto hw = skillHistory(db, now, 0, 10, 4);
-    CHECK(near(hw[9], 60));
+    CHECK(approx(hw[9], 60));
 }
 
 int main() {

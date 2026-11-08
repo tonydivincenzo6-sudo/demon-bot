@@ -146,7 +146,7 @@ struct Totals {
 };
 Totals totals(Database const& db, DrillConfig const& cfg);
 
-int dayIndex(int64_t unix, int tzOffset);   // Tage seit 1970 (Ortszeit)
+int dayIndex(int64_t unixTime, int tzOffset);   // Tage seit 1970 (Ortszeit)
 void civilFromDays(int days, int& year, int& month, int& day);
 
 std::vector<double> playMinutesPerDay(Database const& db, int64_t now, int tzOffset, int days);

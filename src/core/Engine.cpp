@@ -641,8 +641,8 @@ Totals totals(Database const& db, DrillConfig const& cfg) {
     return t;
 }
 
-int dayIndex(int64_t unix, int tzOffset) {
-    int64_t t = unix + tzOffset;
+int dayIndex(int64_t unixTime, int tzOffset) {
+    int64_t t = unixTime + tzOffset;
     int64_t d = t / DAY;
     if (t < 0 && t % DAY != 0) d--;
     return static_cast<int>(d);

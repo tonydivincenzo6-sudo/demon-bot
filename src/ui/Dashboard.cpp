@@ -325,7 +325,7 @@ protected:
         auto c = coachInfo(sp, coachGoal());
         panel(m_content, {10.f, 112.f, 480.f, 124.f}, PURPLE);
         heading(m_content, "5. DEMON COACH & PROGRESSION", {18.f, TOP - 12.f}, PURPLE, .32f);
-        static char const* const SHORT[] = {"EASY", "MEDIUM", "HARD", "INSANE", "EXTREME"};
+        static char const* const TIER_SHORT[] = {"EASY", "MEDIUM", "HARD", "INSANE", "EXTREME"};
         ccColor4F const cols[] = {CYAN, rgba(110, 150, 255), PURPLE, rgba(220, 80, 200), RED};
         auto path = CCDrawNode::create();
         float y = 172.f;
@@ -355,7 +355,7 @@ protected:
                 face->setPosition({x, y});
                 m_content->addChild(face, 3);
             }
-            heading(m_content, SHORT[i], {x, y - 29.f}, i == c.current ? GOLD : rgba(230, 235, 255), .27f, {.5f, .5f});
+            heading(m_content, TIER_SHORT[i], {x, y - 29.f}, i == c.current ? GOLD : rgba(230, 235, 255), .27f, {.5f, .5f});
             text(m_content, fmt::format("{} geschafft", c.demons[i]), {x, y - 41.f}, .4f, GRAY3, {.5f, .5f});
         }
         text(m_content, "ZIEL", {60.f + (c.ready ? c.next : std::max(c.current, 0)) * 95.f, y + 38.f}, .3f, to3(GOLD), {.5f, .5f}, 0,
