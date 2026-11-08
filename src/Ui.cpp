@@ -428,12 +428,18 @@ void showLevelPopup() {
 }
 
 void addPauseButton(CCLayer* pause) {
+    auto btn = CCMenuItemExt::createSpriteExtra(skillfarmIcon(32.f), [](CCMenuItemSpriteExtra*) { showLevelPopup(); });
+    btn->setID("open-button"_spr);
+    // gibt es die linke Knopfleiste (Node-IDs, kommt mit vielen Mods): dort einreihen, sonst eigener Platz links
+    if (auto left = typeinfo_cast<CCMenu*>(pause->getChildByID("left-button-menu"))) {
+        left->addChild(btn);
+        left->updateLayout();
+        return;
+    }
     auto win = CCDirector::get()->getWinSize();
     auto menu = CCMenu::create();
     menu->setID("pause-menu"_spr);
     menu->setPosition({0.f, 0.f});
-    auto btn = CCMenuItemExt::createSpriteExtra(skillfarmIcon(32.f), [](CCMenuItemSpriteExtra*) { showLevelPopup(); });
-    btn->setID("open-button"_spr);
     btn->setPosition({34.f, win.height / 2.f - 20.f});
     menu->addChild(btn);
     pause->addChild(menu, 20);
