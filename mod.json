@@ -7,9 +7,9 @@
 	},
 	"id": "tony.skillfarm",
 	"name": "SkillFarm PRO",
-	"version": "v1.0.0",
+	"version": "v2.0.0",
 	"developer": "Tony",
-	"description": "Dein Trainings-Coach: misst, wo du stirbst, und trainiert die schwersten Stellen in Schleife, mit Serien und steigendem Tempo.",
+	"description": "Dein Trainings-Coach: misst dein Spiel, findet Schwaechen, empfiehlt Level und Abschnitte, plant Sessions und trainiert schwere Stellen im Drill.",
 	"settings": {
 		"title-record": {
 			"type": "title",
@@ -98,6 +98,26 @@
 			"description": "Kurzer Ton bei jedem geschafften Durchgang und beim Meistern.",
 			"type": "bool",
 			"default": true
+		},
+		"title-coach": {
+			"type": "title",
+			"name": "Coach und Sessions"
+		},
+		"coach-goal": {
+			"name": "Demons pro Stufe",
+			"description": "So viele selbst geschaffte Demons einer Stufe (z. B. Easy), dann empfiehlt der Demon Coach die naechste Stufe.",
+			"type": "int",
+			"default": 3,
+			"min": 1,
+			"max": 10
+		},
+		"session-minutes": {
+			"name": "Standard-Session (Minuten)",
+			"description": "Empfohlene Trainingsdauer: 45 (leicht), 60, 90 oder 120. Nach drei langen Tagen schlaegt der Session Manager von selbst einen leichten Tag vor.",
+			"type": "int",
+			"default": 90,
+			"min": 45,
+			"max": 120
 		}
 	}
 }

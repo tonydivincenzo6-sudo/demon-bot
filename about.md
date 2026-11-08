@@ -1,30 +1,24 @@
 # SkillFarm PRO
 
-Dein Trainings-Coach fuer Geometry Dash. SkillFarm spielt nichts fuer dich. Es misst, wie du spielst, und hilft dir,
-genau die Stellen zu trainieren, an denen du haengen bleibst.
+Dein persoenlicher Trainings-Coach fuer Geometry Dash. SkillFarm spielt nichts fuer dich. Es misst, wie du spielst,
+findet deine Schwaechen und fuehrt dich mit klaren Trainingsaufgaben Schritt fuer Schritt zu schwereren Demons.
 
-## Stufe 1
+## Dashboard (Hauptmenue rechts, oder im Pausemenue)
 
-**Aufzeichnung:** Jeder Versuch wird gemessen: Versuche (normal, Uebung, Startpos), wo du stirbst (auf 1 % genau),
-in welchem Spielmodus (Cube, Ship, Ball, UFO, Wave, Robot, Spider, Swing), deine Spielzeit und deine Bestwerte.
-Wenn du ein Level im Normalmodus ohne Hilfen schaffst, wird es als **selbst geschafft (gemessen)** gespeichert.
+- **Uebersicht:** Spielerprofil (z. B. Early Demon Player), Spielzeit, Versuche, Tode, selbst geschaffte Level, Skills auf einen Blick und das naechste Training.
+- **Skills:** Ringe fuer Cube, Ship, Ball, UFO, Wave, Robot, Spider, Swing, Konstanz und Ausdauer. Alles aus deinen echten Daten, nach Level-Schwierigkeit gewichtet. Ohne genug Daten steht dort "-" statt erfundener Werte.
+- **Farm:** Status nach deiner Drill-Quote (unter 40 % leichter, 40-70 % Konstanz aufbauen, 70-85 % steigern, ueber 85 % neue Herausforderung), empfohlene Level aus deiner GD-Bibliothek (mit viel von deiner Schwaeche, passende Schwierigkeit) und die Abschnitte, die du trainieren solltest. "DRILL" oeffnet das Level und startet den Drill von selbst.
+- **Coach:** Dein Demon-Pfad von Easy bis Extreme, wie viele du je Stufe geschafft hast und wann die naechste Stufe dran ist. Die Improvement Engine erkennt Plateaus (kein neuer Bestwert, festgefahrene Abschnitte, untrainierte Schwaechen, zu lange Sessions) und sagt, was du aendern kannst.
+- **Session:** Trainingsplan fuer 45 (leicht), 60, 90 oder 120 Minuten mit Warm-up, Schwaechen-Training, Skill-Farming, Demon-Progression und Auswertung. Die Uhr laeuft auch im Menue, Phasenwechsel werden angesagt.
+- **Statistik:** Spielzeit pro Tag, Versuche pro Woche, selbst geschaffte Demons pro Monat und dein Skill-Verlauf.
 
-**Ehrliche Zahlen:** Versuche mit Noclip oder Speedhack werden erkannt und nicht gezaehlt. Unter "Nur fuer diesen
-Account" kannst du festlegen, dass nur dein Trainings-Account aufgezeichnet wird.
+## Im Level
 
-**Waermekarte:** Unter dem Fortschrittsbalken siehst du, wo du am haeufigsten stirbst (gelb = manchmal, rot = sehr oft).
+- **Waermekarte** unter dem Fortschrittsbalken: wo du stirbst (gelb = manchmal, rot = sehr oft).
+- **Drill:** Im Pausemenue auf den Statistik-Knopf (links), Stelle waehlen, "DRILL STARTEN". Der Abschnitt laeuft in Schleife: Start mit 0,8x, 3-mal hintereinander geschafft = schneller, zu viele Fehler = langsamer, beim Zieltempo 5-mal hintereinander = gemeistert. Nur im Uebungsmodus.
 
-**Drill:** Im Pausemenue auf den Statistik-Knopf (links), eine der schwersten Stellen waehlen und "Drill starten".
-Du spielst bis zum Abschnitt, dann wiederholt SkillFarm genau diesen Abschnitt in Schleife:
-- Start mit langsamerem Tempo (Standard 0,8x)
-- 3-mal hintereinander geschafft: das Tempo steigt um 0,05
-- zu viele Fehler (unter 40 % der letzten Versuche): das Tempo sinkt wieder
-- beim Zieltempo 5-mal hintereinander: **gemeistert**
+## Ehrliche Zahlen
 
-Der Drill laeuft nur im Uebungsmodus. Versuche mit veraendertem Tempo zaehlen nie als echter Abschluss.
-
-**Gesamtstatistik:** Im Hauptmenue rechts auf den Statistik-Knopf: Spielzeit, Sitzungen, Tode pro Minute je
-Spielmodus und deine selbst geschafften Level.
-
-Level, die du schon vor SkillFarm selbst geschafft hast, kannst du im Level-Fenster als "Selbst geschafft" markieren.
+Versuche mit Noclip oder Speedhack werden erkannt und nicht gezaehlt. Unter "Nur fuer diesen Account" legst du fest,
+welcher Account aufgezeichnet wird. Level von vor SkillFarm markierst du im Level-Fenster als "Selbst geschafft".
 Alle Daten bleiben auf deinem PC (skillfarm.json im Speicherordner der Mod).

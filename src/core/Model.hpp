@@ -48,6 +48,34 @@ struct Section {
     std::deque<bool> recent;    // letzte Ergebnisse
     double masteredSpeed = 0;   // hoechstes Tempo, bei dem der Abschnitt gemeistert wurde
     int64_t masteredAt = 0;
+    int64_t lastTried = 0;      // letzter Durchgang (Unix)
+};
+
+// Aufbau eines Levels aus den Portalen: Anteil je Spielmodus und ab welchem Prozent welcher Modus
+struct Segment {
+    float from = 0;             // ab diesem Prozent
+    Mode mode = Mode::Cube;
+};
+
+struct LevelShape {
+    std::array<float, MODES> share{};   // Anteil der Levellaenge je Modus (Summe 1), alles 0 = unbekannt
+    std::vector<Segment> segments;
+    int objects = 0;
+
+    bool known() const;
+    Mode modeAt(float pct) const;
+    Mode mainMode() const;
+};
+
+// Ein Level aus deiner GD-Bibliothek (gespeichert, aber evtl. nie mit SkillFarm gespielt) fuer Empfehlungen
+struct LevelInfo {
+    std::string name;
+    int levelID = 0;
+    int stars = 0;
+    int demonDifficulty = -1;
+    bool platformer = false;
+    bool main = false;          // offizielles Level von RobTop
+    LevelShape shape;
 };
 
 struct LevelStats {
@@ -56,6 +84,9 @@ struct LevelStats {
     int stars = 0;
     int demonDifficulty = -1;   // -1 = kein Demon
     bool platformer = false;
+    bool main = false;          // offizielles Level von RobTop
+    LevelShape shape;           // Aufbau (beim Spielen aus den Portalen gelesen)
+    int64_t manualAt = 0;       // wann von Hand als geschafft markiert
 
     std::array<int, KINDS> attempts{};
     std::array<float, KINDS> best{};                 // bestes erreichtes Prozent je Art
@@ -83,19 +114,53 @@ struct LevelStats {
     Section& section(int from, int to);   // vorhandenen holen oder anlegen
 };
 
-struct Session {
-    int64_t start = 0;
-    double seconds = 0;   // aktive Spielzeit
-    int attempts = 0;
+constexpr double BLOCK_SEC = 15 * 60;   // Sitzungen werden in 15-Minuten-Bloecke aktiver Spielzeit geteilt
+constexpr std::size_t MAX_BLOCKS = 64;
+
+struct Block {
+    double seconds = 0;
     int deaths = 0;
 };
+
+struct Session {
+    int64_t start = 0;
+    int64_t end = 0;        // letzte Aktivitaet
+    double seconds = 0;     // aktive Spielzeit
+    int attempts = 0;
+    int deaths = 0;
+    std::vector<Block> blocks;   // fuer die Ausdauer: Tode je 15 Minuten
+
+    void addTime(double sec);
+    void addDeath();
+};
+
+// Ergebnis einer geplanten Trainings-Session (Session Manager)
+struct PlanResult {
+    int64_t start = 0;
+    int minutes = 0;        // geplante Dauer
+    int phasesDone = 0;
+    int phases = 0;
+    int attempts = 0;
+    int deaths = 0;
+    double playSeconds = 0;
+    int mastered = 0;       // neu gemeisterte Abschnitte
+    int completions = 0;    // neu selbst geschaffte Level
+};
+
+constexpr int SKILLS = MODES + 2;          // 8 Modi + Konstanz + Ausdauer
+constexpr std::size_t MAX_SNAPSHOTS = 400;
+constexpr std::size_t MAX_PLANS = 200;
 
 struct Database {
     std::map<std::string, LevelStats> levels;
     std::vector<Session> sessions;
+    std::map<std::string, LevelInfo> library;               // analysierte Level aus der GD-Bibliothek
+    std::map<int, std::array<float, SKILLS>> snapshots;     // Tag -> Skill-Werte (-1 = keine Daten)
+    std::vector<PlanResult> plans;
 
     LevelStats& level(std::string const& key) { return levels[key]; }
     LevelStats const* find(std::string const& key) const;
+    LevelShape const* shapeOf(std::string const& key) const;   // aus gespielten Leveln oder der Bibliothek
 
     // Sitzung fortsetzen oder neu beginnen (neu nach gapSec ohne Spielen)
     Session& session(int64_t now, int64_t lastActivity, int64_t gapSec);

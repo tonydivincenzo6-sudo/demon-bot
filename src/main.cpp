@@ -1,11 +1,14 @@
-// SkillFarm PRO – Aufzeichnung, Erkennung von Hilfen und Drill im Spiel
+// SkillFarm PRO – Aufzeichnung, Erkennung von Hilfen, Drill, Session Manager und Level-Bibliothek
 //
-// Stufe 1: misst Versuche, Tode (Prozent + Spielmodus), Spielzeit und echte Abschluesse; erkennt Noclip und
-// Speedhack und zaehlt solche Versuche nicht; trainiert im Uebungsmodus einen Abschnitt in Schleife mit Serien
-// und anpassendem Tempo. Alle Daten bleiben lokal in skillfarm.json im Speicherordner der Mod.
+// Misst Versuche, Tode (Prozent + Spielmodus), Spielzeit und echte Abschluesse; erkennt Noclip und Speedhack und
+// zaehlt solche Versuche nicht; trainiert im Uebungsmodus einen Abschnitt in Schleife mit Serien und anpassendem
+// Tempo; fuehrt durch geplante Trainings-Sessions; liest den Aufbau deiner Level fuer Empfehlungen.
+// Alle Daten bleiben lokal in skillfarm.json im Speicherordner der Mod.
 
 #include "Shared.hpp"
+#include "core/LevelScan.hpp"
 
+#include <Geode/modify/CCScheduler.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -28,6 +31,11 @@ bool g_loaded = false;   // nur speichern, wenn das Laden geklappt hat (nie frem
 bool g_dirty = false;
 int64_t g_lastActivity = 0;
 Live g_live;
+PlanRun g_plan;
+LibraryScan g_scan;
+std::string g_pendingKey;   // Drill, der beim naechsten Start dieses Levels beginnen soll
+int g_pendingFrom = -1;
+int g_pendingTo = -1;
 
 constexpr int64_t SESSION_GAP = 20 * 60;   // so lange Pause = neue Trainings-Sitzung
 
@@ -84,8 +92,6 @@ Session& currentSession() {
     return g_db.sessions.back();
 }
 
-void markDirty() { g_dirty = true; }
-
 std::string speedStr(double s) {
     auto t = fmt::format("{:.2f}x", s);
     std::replace(t.begin(), t.end(), '.', ',');
@@ -115,6 +121,22 @@ void resetLive(bool releaseCheckpoint) {
     if (releaseCheckpoint) releaseCp();
     setPitch(1.f);
     g_live = Live{};
+}
+
+// Aufbau des Levels aus den Portalen der geladenen Objekte
+void scanShape(PlayLayer* pl, LevelStats& ls) {
+    if (ls.shape.known() || !pl->m_objects || pl->m_levelLength <= 0.f) return;
+    std::vector<Portal> portals;
+    int objects = 0;
+    for (unsigned int i = 0; i < pl->m_objects->count(); i++) {
+        auto obj = static_cast<GameObject*>(pl->m_objects->objectAtIndex(i));
+        if (!obj) continue;
+        objects++;
+        int m = portalMode(obj->m_objectID);
+        if (m >= 0) portals.push_back({obj->getPositionX(), static_cast<Mode>(m)});
+    }
+    int start = pl->m_levelSettings ? pl->m_levelSettings->m_startMode : 0;
+    ls.shape = buildShape(std::move(portals), static_cast<Mode>(std::clamp(start, 0, MODES - 1)), pl->m_levelLength, objects);
 }
 
 // ---------------- Versuche ----------------
@@ -159,6 +181,7 @@ void drillResult(bool success) {
     auto s = drillSection();
     if (!s) return;
     auto cfg = drillConfig();
+    s->lastTried = unixNow();
     auto ev = drillAttempt(*s, success, cfg, unixNow());
     markDirty();
     if (success) playSound("counter003.ogg");
@@ -270,11 +293,21 @@ void onLevelEnter(PlayLayer* pl, GJGameLevel* level) {
     ls.stars = level->m_stars.value();
     ls.demonDifficulty = level->m_demon.value() > 0 ? level->m_demonDifficulty : -1;
     ls.platformer = L.platformer;
+    ls.main = level->m_levelType == GJLevelType::Main;
+    scanShape(pl, ls);
     auto now = unixNow();
     ls.lastPlayed = now;
     g_db.session(now, g_lastActivity, SESSION_GAP);
     g_lastActivity = now;
     L.lastSave = wallNow();
+    // Drill aus dem Dashboard: beginnt, sobald das Level laeuft
+    if (!g_pendingKey.empty()) {
+        if (g_pendingKey == L.key && !L.platformer) {
+            L.autoFrom = g_pendingFrom;
+            L.autoTo = g_pendingTo;
+        }
+        g_pendingKey.clear();
+    }
     markDirty();
     buildHeatmap(pl);
     updateHud(pl);
@@ -285,6 +318,7 @@ void onLevelLeave(PlayLayer* pl) {
     if (L.layer != pl) return;
     if (L.recording) {
         endRun(false, false, L.runMax);
+        takeSnapshot();
         saveDb();
     }
     resetLive(true);
@@ -335,7 +369,7 @@ void onDeath(PlayLayer* pl, PlayerObject* player) {
         if (!L.platformer) ls.deaths[L.kind == RunKind::Normal ? 0 : 1][binOf(pct)]++;
         ls.modeDeaths[static_cast<int>(modeOf(player))]++;
     }
-    if (L.runActive && !L.runFlagged) currentSession().deaths++;
+    if (L.runActive && !L.runFlagged) currentSession().addDeath();
     // Drill: Tod im Abschnitt beendet die Serie
     if (L.drill && L.drillCp && !L.sectionDone && L.runActive && !L.runFlagged && pct < L.secTo) {
         drillResult(false);
@@ -399,12 +433,26 @@ void afterUpdate(PlayLayer* pl, float gameDt) {
     auto& ls = g_db.level(L.key);
     if (L.lastWall > 0) {
         ls.playTime += L.lastWall;
-        currentSession().seconds += L.lastWall;
+        auto& session = currentSession();
+        session.addTime(L.lastWall);
         g_lastActivity = unixNow();
+        session.end = g_lastActivity;
         markDirty();
     }
     bool isAlive = alive(pl);
     float pct = percentOf(pl);
+    if (L.autoFrom >= 0 && isAlive) {
+        // Drill aus dem Dashboard starten (im naechsten Bild, nicht mitten im Update)
+        int from = L.autoFrom, to = L.autoTo;
+        L.autoFrom = L.autoTo = -1;
+        geode::queueInMainThread([from, to] {
+            auto pl = PlayLayer::get();
+            if (pl && isCurrent(pl)) {
+                drillEnable(pl, from, to);
+                showToast(fmt::format("Drill {}-{}%: spiel bis zum Abschnitt", from, to));
+            }
+        });
+    }
     if (!L.runActive && isAlive && !L.pendingReset && !L.sectionDone && !L.needsReset) startRun(pl, pct);
     if (L.runActive) {
         L.runMax = std::max(L.runMax, pct);
@@ -418,11 +466,53 @@ void afterUpdate(PlayLayer* pl, float gameDt) {
     // gespeichert wird nie waehrend des Spielens (kein Ruckler): beim Pausieren, Levelende und Verlassen
 }
 
+// ---------------- Session Manager ----------------
+void planPhaseChanged(int index) {
+    auto& P = g_plan;
+    if (index < 0 || index >= static_cast<int>(P.steps.size())) return;
+    auto const& step = P.steps[static_cast<std::size_t>(index)];
+    playSound("counter003.ogg");
+    showToast(fmt::format("Phase {}/{}: {} ({} Min) - {}", index + 1, P.steps.size(), phaseName(step.phase), step.minutes,
+                          planHint(step.phase)));
+}
+
+void planFinish(bool completed) {
+    auto& P = g_plan;
+    if (!P.active) return;
+    auto now = totals(g_db, drillConfig());
+    PlanResult r;
+    r.start = P.startUnix;
+    r.minutes = P.minutes;
+    r.phases = static_cast<int>(P.steps.size());
+    auto st = phaseAt(P.steps, P.elapsed);
+    r.phasesDone = completed ? r.phases : st.index;
+    r.attempts = static_cast<int>(now.attempts - P.start.attempts);
+    r.deaths = static_cast<int>(now.deaths - P.start.deaths);
+    r.playSeconds = std::max(0.0, now.playSeconds - P.start.playSeconds);
+    r.mastered = std::max(0, now.mastered - P.start.mastered);
+    r.completions = std::max(0, now.completions - P.start.completions);
+    g_db.plans.push_back(r);
+    while (g_db.plans.size() > MAX_PLANS) g_db.plans.erase(g_db.plans.begin());
+    markDirty();
+    P = PlanRun{};
+    if (completed) {
+        playSound("highscoreGet02.ogg");
+        showToast(fmt::format("Session fertig! {} Versuche, {} Abschnitte gemeistert. Auswertung im Dashboard.", r.attempts,
+                              r.mastered));
+    }
+    saveDb();
+}
+
 }  // namespace
 
-// ---------------- oeffentliche Funktionen ----------------
+// =====================================================================
+// oeffentliche Funktionen
+// =====================================================================
 Database& db() { return g_db; }
 Live& live() { return g_live; }
+PlanRun& planRun() { return g_plan; }
+LibraryScan& libraryScan() { return g_scan; }
+void markDirty() { g_dirty = true; }
 
 int64_t unixNow() {
     return static_cast<int64_t>(std::time(nullptr));
@@ -431,6 +521,20 @@ int64_t unixNow() {
 double wallNow() {
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+int tzOffset() {
+    static int cached = 0;
+    static double when = -1e9;
+    double w = wallNow();
+    if (w - when < 600) return cached;   // alle 10 Minuten neu (Sommerzeit)
+    when = w;
+    std::time_t t = std::time(nullptr);
+    std::tm local = *std::localtime(&t);
+    std::tm utc = *std::gmtime(&t);
+    utc.tm_isdst = local.tm_isdst;
+    cached = static_cast<int>(std::difftime(std::mktime(&local), std::mktime(&utc)));
+    return cached;
 }
 
 void saveDb() {
@@ -477,9 +581,25 @@ DrillConfig drillConfig() {
     return c.sanitized();
 }
 
+int coachGoal() {
+    return static_cast<int>(std::clamp<int64_t>(Mod::get()->getSettingValue<int64_t>("coach-goal"), 1, 20));
+}
+
+int sectionLength() {
+    return static_cast<int>(std::clamp<int64_t>(Mod::get()->getSettingValue<int64_t>("section-length"), 3, 30));
+}
+
+int leadIn() {
+    return static_cast<int>(std::clamp<int64_t>(Mod::get()->getSettingValue<int64_t>("lead-in"), 0, 10));
+}
+
 bool isCurrent(PlayLayer* pl) {
     auto& L = g_live;
     return pl && L.recording && L.layer == pl && PlayLayer::get() == pl;
+}
+
+bool inLevel() {
+    return PlayLayer::get() != nullptr;
 }
 
 Section* drillSection() {
@@ -488,6 +608,12 @@ Section* drillSection() {
     auto it = g_db.levels.find(L.key);
     if (it == g_db.levels.end()) return nullptr;
     return it->second.findSection(L.secFrom, L.secTo);
+}
+
+void requestDrill(std::string const& key, int from, int to) {
+    g_pendingKey = key;
+    g_pendingFrom = from;
+    g_pendingTo = to;
 }
 
 void drillEnable(PlayLayer* pl, int from, int to) {
@@ -525,6 +651,172 @@ void drillDisable(PlayLayer* pl) {
         updateHud(pl);
         refreshHeatmap(pl);
     }
+}
+
+// ---------------- Session Manager ----------------
+void planStart(int minutes) {
+    if (g_plan.active) planFinish(false);
+    auto& P = g_plan;
+    P = PlanRun{};
+    P.active = true;
+    P.minutes = minutes;
+    P.steps = makePlan(minutes);
+    P.lastTick = wallNow();
+    P.startUnix = unixNow();
+    P.start = totals(g_db, drillConfig());
+    P.lastPhase = 0;
+    planPhaseChanged(0);
+}
+
+void planTogglePause() {
+    auto& P = g_plan;
+    if (!P.active) return;
+    P.paused = !P.paused;
+    P.lastTick = wallNow();
+}
+
+void planStop(bool completed) {
+    planFinish(completed);
+}
+
+void planTick() {
+    auto& P = g_plan;
+    if (!P.active) return;
+    double now = wallNow();
+    double dt = now - P.lastTick;
+    P.lastTick = now;
+    if (P.paused || dt <= 0) return;
+    P.elapsed += std::min(dt, 1.0);   // Absturz/Haenger zaehlen nicht als Trainingszeit
+    auto st = phaseAt(P.steps, P.elapsed);
+    if (st.finished) {
+        planFinish(true);
+        return;
+    }
+    if (st.index != P.lastPhase) {
+        P.lastPhase = st.index;
+        planPhaseChanged(st.index);
+    }
+}
+
+std::string planHint(Phase p) {
+    auto sp = computeSkills(g_db);
+    auto fs = farmStatus(g_db, sp, unixNow(), coachGoal());
+    switch (p) {
+        case Phase::WarmUp: return "ein Level, das du sicher kannst";
+        case Phase::Weakness: {
+            if (sp.weakest < 0) return "Drill auf deiner schwersten Stelle";
+            return fmt::format("{}: Drill oder Level mit viel {}", modeName(static_cast<Mode>(sp.weakest)),
+                               modeName(static_cast<Mode>(sp.weakest)));
+        }
+        case Phase::Farming: {
+            auto picks = recommendLevels(g_db, sp, fs, 1);
+            if (!picks.empty()) return fmt::format("{} ({})", picks[0].name, tierName(picks[0].tier));
+            return fmt::format("Level auf {}-Niveau", tierName(fs.targetTier));
+        }
+        case Phase::Demon: {
+            auto coach = coachInfo(sp, coachGoal());
+            return fmt::format("Versuche an deinem {}", demonName(coach.ready ? coach.next : std::max(coach.current, 0)));
+        }
+        case Phase::Review: return "Ergebnis im Dashboard ansehen";
+    }
+    return "";
+}
+
+// ---------------- Level-Bibliothek ----------------
+void libraryScanStart() {
+    auto& S = g_scan;
+    if (S.running) return;
+    S = LibraryScan{};
+    auto glm = GameLevelManager::get();
+    if (!glm) return;
+    // offizielle Level 1-22
+    for (int i = 1; i <= 22; i++) {
+        auto key = fmt::format("main-{}", i);
+        if (!g_db.shapeOf(key)) S.queue.push_back({i, true});
+    }
+    // alle gespeicherten Online-Level (alles, was du je geoeffnet hast)
+    if (auto dict = glm->m_onlineLevels) {
+        for (auto [k, lvl] : CCDictionaryExt<std::string, GJGameLevel*>(dict)) {
+            (void)k;
+            if (!lvl) continue;
+            int id = lvl->m_levelID.value();
+            if (id <= 0) continue;
+            if (!g_db.shapeOf(fmt::format("online-{}", id))) S.queue.push_back({id, false});
+        }
+    }
+    S.total = S.queue.size();
+    S.running = !S.queue.empty();
+    S.finished = S.queue.empty();
+}
+
+void libraryScanStep(double budgetSec) {
+    auto& S = g_scan;
+    if (!S.running) return;
+    auto glm = GameLevelManager::get();
+    double t0 = wallNow();
+    while (!S.queue.empty() && wallNow() - t0 < budgetSec) {
+        auto [id, isMain] = S.queue.back();
+        S.queue.pop_back();
+        S.done++;
+        GJGameLevel* lvl = nullptr;
+        if (glm) lvl = isMain ? glm->getMainLevel(id, false) : glm->getSavedLevel(id);
+        if (!lvl) continue;
+        std::string packed = lvl->m_levelString;
+        if (packed.empty()) continue;
+        std::string data = ZipUtils::decompressString(packed, false, 0);
+        if (data.empty()) continue;
+        auto res = scanLevelString(data);
+        if (!res.ok) continue;
+        LevelInfo info;
+        info.name = std::string(lvl->m_levelName);
+        info.levelID = id;
+        info.stars = lvl->m_stars.value();
+        info.demonDifficulty = lvl->m_demon.value() > 0 ? lvl->m_demonDifficulty : -1;
+        info.platformer = res.platformer || lvl->isPlatformer();
+        info.main = isMain;
+        info.shape = res.shape;
+        g_db.library[fmt::format("{}-{}", isMain ? "main" : "online", id)] = std::move(info);
+        markDirty();
+    }
+    if (S.queue.empty()) {
+        S.running = false;
+        S.finished = true;
+        saveDb();
+    }
+}
+
+// ---------------- Level oeffnen ----------------
+void openLevel(std::string const& key, int levelID, bool main) {
+    if (inLevel() || levelID <= 0) return;
+    CCScene* scene = nullptr;
+    if (main) {
+        scene = LevelSelectLayer::scene(std::clamp(levelID - 1, 0, 21));
+    } else if (auto lvl = GameLevelManager::get()->getSavedLevel(levelID)) {
+        scene = LevelInfoLayer::scene(lvl, false);
+    } else {
+        scene = LevelBrowserLayer::scene(GJSearchObject::create(SearchType::Search, std::to_string(levelID)));
+    }
+    if (scene) CCDirector::get()->replaceScene(CCTransitionFade::create(.4f, scene));
+    (void)key;
+}
+
+void openSearch(int tier) {
+    if (inLevel()) return;
+    tier = std::clamp(tier, 1, 10);
+    std::string difficulty = tier >= 6 ? "-2" : std::to_string(tier);
+    int demonFilter = tier >= 6 ? tier - 5 : 0;
+    auto search = GJSearchObject::create(SearchType::Search, "", difficulty, "-", 0, true, false, false, 0, false, false, false,
+                                         false, false, false, false, false, false, false, demonFilter, 0, 0);
+    if (!search) return;
+    CCDirector::get()->replaceScene(CCTransitionFade::create(.4f, LevelBrowserLayer::scene(search)));
+}
+
+void takeSnapshot() {
+    auto sp = computeSkills(g_db);
+    int day = dayIndex(unixNow(), tzOffset());
+    g_db.snapshots[day] = snapshotOf(sp);
+    while (g_db.snapshots.size() > MAX_SNAPSHOTS) g_db.snapshots.erase(g_db.snapshots.begin());
+    markDirty();
 }
 
 }  // namespace sf
@@ -604,6 +896,14 @@ class $modify(SFMenuLayer, MenuLayer) {
         if (!MenuLayer::init()) return false;
         sf::addMenuButton(this);
         return true;
+    }
+};
+
+// Session-Uhr laeuft auch in Menues weiter
+class $modify(SFScheduler, CCScheduler) {
+    void update(float dt) {
+        CCScheduler::update(dt);
+        sf::planTick();
     }
 };
 
