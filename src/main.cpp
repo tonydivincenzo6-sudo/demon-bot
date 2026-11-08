@@ -779,7 +779,9 @@ void libraryScanStep(double budgetSec) {
         S.done++;
         auto key = fmt::format("{}-{}", isMain ? "main" : "online", id);
         GJGameLevel* lvl = nullptr;
-        if (glm) lvl = isMain ? glm->getMainLevel(id, false) : glm->getSavedLevel(id);
+        // offizielle Level frisch mit Level-Daten holen (GDs Zwischenspeicher hat sie oft ohne)
+        if (isMain) lvl = LevelTools::getLevel(id, false);
+        else if (glm) lvl = glm->getSavedLevel(id);
         if (!lvl) continue;
         std::string packed = lvl->m_levelString;
         if (packed.empty()) continue;   // nie heruntergeladen: vielleicht spaeter
