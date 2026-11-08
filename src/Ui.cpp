@@ -47,11 +47,11 @@ ccColor3B heatColor(double v) {   // 0..1: gelb -> rot
 }
 
 CCLabelBMFont* addLabel(CCNode* parent, std::string const& text, CCPoint pos, float scale,
-                        char const* font = "chatFont.fnt", CCPoint anchor = {0.f, 0.5f}) {
+                        char const* font = "chatFont.fnt", CCPoint anchor = {0.f, 0.5f}, float maxWidth = 390.f) {
     auto l = CCLabelBMFont::create(text.c_str(), font);
-    l->setScale(scale);
     l->setAnchorPoint(anchor);
     l->setPosition(pos);
+    limitNodeWidth(l, maxWidth, scale, scale * 0.5f);   // lange Zeilen verkleinern statt ueber den Rand
     parent->addChild(l);
     return l;
 }
