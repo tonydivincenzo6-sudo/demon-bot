@@ -415,10 +415,7 @@ void afterUpdate(PlayLayer* pl, float gameDt) {
     drillTick(pl, pct, isAlive);
     if (!L.heatmapReady) buildHeatmap(pl);
     updateHud(pl);
-    if (g_dirty && wallNow() - L.lastSave > 60.0) {
-        L.lastSave = wallNow();
-        saveDb();
-    }
+    // gespeichert wird nie waehrend des Spielens (kein Ruckler): beim Pausieren, Levelende und Verlassen
 }
 
 }  // namespace
@@ -509,7 +506,8 @@ void drillEnable(PlayLayer* pl, int from, int to) {
     markDirty();
     if (!pl->m_isPracticeMode) pl->togglePracticeMode(true);
     removeCheckpointsAfter(pl, static_cast<float>(from));
-    L.needsReset = true;   // nach dem Fortsetzen am letzten Checkpoint vor dem Abschnitt starten
+    // schon hinter dem Abschnittsanfang: nach dem Fortsetzen am letzten Checkpoint davor neu starten
+    L.needsReset = percentOf(pl) >= static_cast<float>(from);
     updateHud(pl);
     refreshHeatmap(pl);
 }
@@ -597,6 +595,7 @@ class $modify(SFPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
         sf::addPauseButton(this);
+        if (sf::g_dirty) sf::saveDb();   // Spiel steht: guter Moment zum Speichern
     }
 };
 
