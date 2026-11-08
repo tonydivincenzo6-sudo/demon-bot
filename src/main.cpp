@@ -229,6 +229,8 @@ void requestReset() {
         auto pl = PlayLayer::get();
         L.pendingReset = false;
         if (!pl || pl != L.layer || pl->m_isPaused) return;   // pausiert: nach dem Fortsetzen erneut
+        // gerade gestorben (GD setzt selbst zurueck) oder Level geschafft (Endbildschirm): nichts tun
+        if (!alive(pl) || pl->m_hasCompletedLevel || pl->m_levelEndAnimationStarted) return;
         L.needsReset = false;
         pl->resetLevel();
     });
@@ -349,6 +351,11 @@ void onComplete(PlayLayer* pl) {
     auto& L = g_live;
     bool legit = L.runActive && L.kind == RunKind::Normal && !L.runFlagged && !L.runSlowed && !pl->m_isTestMode &&
                  !pl->m_isPracticeMode;
+    // Drill-Abschnitt, der bis ans Levelende reicht (z. B. Level mit End-Trigger): zaehlt als geschafft
+    if (L.drill && L.drillCp && !L.sectionDone && L.runActive && !L.runFlagged && pl->m_isPracticeMode) {
+        L.sectionDone = true;
+        drillResult(true);
+    }
     L.runMax = 100.f;
     endRun(false, true, 100.f);
     if (legit) {
@@ -626,8 +633,9 @@ void requestDrill(std::string const& key, int from, int to) {
 void drillEnable(PlayLayer* pl, int from, int to) {
     auto& L = g_live;
     if (!isCurrent(pl) || L.platformer) return;
-    from = std::clamp(from, 0, 99);
-    to = std::clamp(to, from + 1, 100);
+    // Ende hoechstens 99 %: bei 100 % waere das Level geschafft und GDs Endbildschirm kaeme dazwischen
+    from = std::clamp(from, 0, 98);
+    to = std::clamp(to, from + 1, 99);
     releaseCp();
     L.drill = true;
     L.secFrom = from;
@@ -637,7 +645,10 @@ void drillEnable(PlayLayer* pl, int from, int to) {
     auto& s = g_db.level(L.key).section(from, to);
     drillPrepare(s, drillConfig());
     markDirty();
-    if (!pl->m_isPracticeMode) pl->togglePracticeMode(true);
+    if (!pl->m_isPracticeMode) {
+        endRun(false, false, L.runMax);   // laufender normaler Versuch endet hier, weiter geht es im Uebungsmodus
+        pl->togglePracticeMode(true);
+    }
     removeCheckpointsAfter(pl, static_cast<float>(from));
     // schon hinter dem Abschnittsanfang: nach dem Fortsetzen am letzten Checkpoint davor neu starten
     L.needsReset = percentOf(pl) >= static_cast<float>(from);

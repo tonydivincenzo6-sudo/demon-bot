@@ -8,6 +8,8 @@
 - Session Manager: Trainingsplaene fuer 45/60/90/120 Minuten mit Phasen-Ansage und Auswertung, leichter Tag nach drei langen Tagen
 - Statistik: Spielzeit pro Tag, Versuche pro Woche, Demons pro Monat, Skill-Verlauf
 - Drill direkt aus dem Dashboard starten; Level-Fenster im neuen Look mit Level-Aufbau
+- Offizielle Level nach ihrer GD-Schwierigkeit (z. B. xStep = Insane); Clubstep, Theory of Everything 2 und Deadlocked zaehlen als Easy Demons
+- Im Level: Drill-Info oben in der Mitte, Session-Uhr klein links oben
 
 # v1.0.0
 - Stufe 1: Aufzeichnung (Versuche, Tode nach Prozent und Spielmodus, Spielzeit, Bestwerte, echte Abschluesse)

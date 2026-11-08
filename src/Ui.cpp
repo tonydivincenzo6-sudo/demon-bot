@@ -54,15 +54,15 @@ protected:
         } else if (ls) {
             auto hs = hotspots(ls->allDeaths(), 1, sectionLength(), leadIn());
             if (!hs.empty()) {
-                m_from = hs[0].from;
-                m_to = hs[0].to;
+                m_from = std::min(hs[0].from, 98);
+                m_to = std::clamp(hs[0].to, m_from + 1, 99);
             }
         }
         if (m_from < 0) {
             if (auto pl = PlayLayer::get()) {
                 int p = std::clamp(static_cast<int>(pl->getCurrentPercent()), 0, 95);
                 m_from = p;
-                m_to = std::min(100, p + sectionLength());
+                m_to = std::min(99, p + sectionLength());
             }
         }
 
@@ -186,10 +186,12 @@ protected:
         for (auto const& h : hs) {
             std::string label = fmt::format("{}-{}% ({})", h.from, h.to, h.deaths);
             if (ls->shape.known()) label = fmt::format("{}-{}% {}", h.from, h.to, modeName(ls->shape.modeAt((h.from + h.to) / 2.f)));
-            bool sel = h.from == m_from && h.to == m_to;
-            button(menu, label, {bx, hsY}, {86.f, 17.f}, PURPLE, sel, [this, h](CCMenuItemSpriteExtra*) {
-                m_from = h.from;
-                m_to = h.to;
+            int hFrom = std::min(h.from, 98);
+            int hTo = std::clamp(h.to, hFrom + 1, 99);   // Drill endet hoechstens bei 99 %
+            bool sel = hFrom == m_from && hTo == m_to;
+            button(menu, label, {bx, hsY}, {86.f, 17.f}, PURPLE, sel, [this, hFrom, hTo](CCMenuItemSpriteExtra*) {
+                m_from = hFrom;
+                m_to = hTo;
                 this->later();
             });
             bx += 90.f;
@@ -210,7 +212,7 @@ protected:
             stepButton("+", 252.f, [this] { m_from = std::min(m_to - 1, m_from + 1); });
             text(m_content, "Ende", {306.f, dy}, .45f, GRAY3, {1.f, .5f});
             stepButton("-", 320.f, [this] { m_to = std::max(m_from + 1, m_to - 1); });
-            stepButton("+", 344.f, [this] { m_to = std::min(100, m_to + 1); });
+            stepButton("+", 344.f, [this] { m_to = std::min(99, m_to + 1); });
 
             auto cfg = drillConfig();
             std::string status;
